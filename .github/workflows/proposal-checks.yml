@@ -183,6 +183,9 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
+          # The calling repo's package.json may declare pnpm; v5 would then try to
+          # cache pnpm, which isn't installed. cspell runs via npx, no cache needed.
+          package-manager-cache: false
       - name: cspell on changed proposal .md files
         id: check
         env:
