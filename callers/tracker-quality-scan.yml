@@ -1,0 +1,30 @@
+name: quality-scan
+on:
+  workflow_dispatch:
+    inputs:
+      statuses:
+        description: Comma-separated board statuses to scan
+        default: "To Do,In Progress,Blocked"
+      max_issues:
+        description: Max issues to scan in one run
+        default: "50"
+      dry_run:
+        type: boolean
+        default: true
+jobs:
+  scan:
+    permissions:
+      contents: read
+      issues: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/quality-scan.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      statuses: ${{ inputs.statuses }}
+      max_issues: ${{ fromJson(inputs.max_issues) }}
+      dry_run: ${{ fromJson(inputs.dry_run) }}
+      board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
+      discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
+      backend: openrouter
+    secrets:
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}

@@ -1,0 +1,79 @@
+name: pr-board
+on:
+  workflow_call:
+    inputs:
+      command:
+        required: true
+        type: string
+      board_app_ref:
+        required: true
+        type: string
+      dry_run:
+        type: boolean
+        default: true
+      config:
+        type: string
+        default: board-tool/config.json
+    secrets:
+      BOARD_APP_PRIVATE_KEY:
+        required: true
+permissions: {}
+defaults:
+  run:
+    shell: bash
+jobs:
+  run:
+    if: github.event.pull_request.head.repo.full_name == github.repository && (inputs.command != 'pr-issue-check' || github.event.pull_request.base.ref == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+    steps:
+      - name: Validate required org variables
+        run: |
+          missing=()
+          [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
+          [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Error: pr-board requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+            exit 1
+          fi
+      - name: Mint read-only app token (pr-issue-check)
+        id: mint-ro
+        if: inputs.command == 'pr-issue-check'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }}
+          permission-pull-requests: read
+          permission-issues: read
+          permission-contents: read
+      - name: Mint app token (pr-sync)
+        id: mint-full
+        if: inputs.command == 'pr-sync'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }}
+      - name: Check out the board app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
+          ref: ${{ inputs.board_app_ref }}
+          path: board-tool
+          token: ${{ steps.mint-ro.outputs.token || steps.mint-full.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run board.py
+        env:
+          GH_TOKEN: ${{ steps.mint-ro.outputs.token || steps.mint-full.outputs.token }}
+          COMMAND: ${{ inputs.command }}
+          BOARD_CONFIG: ${{ inputs.config }}
+        run: python3 board-tool/board.py "$COMMAND" --event "$GITHUB_EVENT_PATH" --config "$BOARD_CONFIG"

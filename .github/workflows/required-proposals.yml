@@ -1,0 +1,20 @@
+name: required-proposals
+# Entry point for a future org ruleset on aave-proposals-v3-style repos:
+# add this as a required status check once a repo-ruleset workflow exists.
+on:
+  pull_request:
+  merge_group:
+jobs:
+  proposal-checks:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/proposal-checks.yml@main"
+    with:
+      min_coverage: 100
+      backend: openrouter
+      dry_run: true
+    secrets:
+      RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

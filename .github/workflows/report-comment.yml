@@ -1,0 +1,82 @@
+name: report-comment
+on:
+  workflow_call:
+    inputs:
+      workflow-name:
+        required: true
+        type: string
+      dry_run:
+        type: boolean
+        default: true
+permissions: {}
+defaults:
+  run:
+    shell: bash
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.name == inputs.workflow-name &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      actions: read
+    env:
+      DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+      MARKER: "<!-- github-workflows-report -->"
+    steps:
+      - name: Resolve and verify the triggering run
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          number="$RUN_PR_NUMBER"
+          if [ -z "$number" ]; then
+            number=$(gh api "repos/$REPO/commits/$RUN_HEAD_SHA/pulls" --jq '.[0].number')
+          fi
+          [ -n "$number" ] || { echo "no PR found for this run"; exit 1; }
+          pr_head=$(gh api "repos/$REPO/pulls/$number" --jq '[.head.sha,.head.repo.full_name]|@tsv')
+          [ "$(printf '%s' "$pr_head" | cut -f1)" = "$RUN_HEAD_SHA" ] || { echo "head sha mismatch"; exit 1; }
+          [ "$(printf '%s' "$pr_head" | cut -f2)" = "$RUN_HEAD_REPO" ] || { echo "head repo mismatch"; exit 1; }
+          echo "pr_number=$number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$RUN_HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Download report artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh run download "$RUN_ID" -n content -D /tmp/content
+      - name: Cross-check artifact against the trusted run, then assemble
+        env:
+          TRUSTED_PR: ${{ steps.verify.outputs.pr_number }}
+          TRUSTED_SHA: ${{ steps.verify.outputs.head_sha }}
+        run: |
+          [ "$(cat /tmp/content/pr_number.txt)" = "$TRUSTED_PR" ] || { echo "artifact PR mismatch"; exit 1; }
+          [ "$(cat /tmp/content/head_sha.txt)" = "$TRUSTED_SHA" ] || { echo "artifact sha mismatch"; exit 1; }
+          rm /tmp/content/pr_number.txt /tmp/content/head_sha.txt
+          printf '%s\n' "$MARKER" > /tmp/comment.md
+          cat /tmp/content/*.txt \
+            | sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' \
+            | head -c 60000 >> /tmp/comment.md
+      - name: Post or update comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.verify.outputs.pr_number }}
+        run: |
+          if [ "${DRY_RUN:-1}" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"report-comment",number:$n}' >&2
+            exit 0
+          fi
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
+          if [ -n "$existing" ]; then
+            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@/tmp/comment.md
+          else
+            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@/tmp/comment.md
+          fi

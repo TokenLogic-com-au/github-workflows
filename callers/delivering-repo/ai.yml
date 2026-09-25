@@ -1,0 +1,23 @@
+name: ai-comment
+on:
+  pull_request:
+    types: [labeled]
+  issues:
+    types: [opened]
+jobs:
+  ai:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      kind: ${{ github.event_name == 'pull_request' && 'review' || 'scope' }}
+      backend: openrouter
+      dry_run: true
+      board_app_ref: "<board app commit SHA>" # REQUIRED for scope: pin to the reviewed board app commit
+      discord_bot_ref: "<bot commit SHA>" # REQUIRED for scope: pin to the reviewed bot commit
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}

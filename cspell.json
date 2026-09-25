@@ -1,0 +1,9 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "dictionaries": ["aave-terms"],
+  "dictionaryDefinitions": [
+    { "name": "aave-terms", "path": "./aave-wordlist.txt" }
+  ],
+  "ignorePaths": ["lib/**", "node_modules/**", "out/**", "cache/**", "diffs/**", "reports/**"]
+}

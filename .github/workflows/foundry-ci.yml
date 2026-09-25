@@ -1,0 +1,65 @@
+name: foundry-ci
+on:
+  workflow_call:
+    inputs:
+      min_coverage:
+        type: number
+        default: 0
+    secrets:
+      ALCHEMY_API_KEY:
+        required: false
+      QUICKNODE_TOKEN:
+        required: false
+      QUICKNODE_ENDPOINT_NAME:
+        required: false
+permissions: {}
+defaults:
+  run:
+    shell: bash
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - run: forge fmt --check
+      - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
+        with:
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+          QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
+      - run: forge build --deny notes
+      - name: forge test
+        env:
+          FOUNDRY_FUZZ_RUNS: ${{ github.event_name == 'pull_request' && '5000' || '10000' }}
+        run: forge test -vvv
+      - uses: aave-dao/github-workflows/.github/actions/foundry-size@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - run: forge build --sizes
+      - uses: aave-dao/github-workflows/.github/actions/foundry-gas-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        continue-on-error: true
+      - uses: aave-dao/github-workflows/.github/actions/foundry-lcov-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        continue-on-error: true
+      - name: Coverage threshold (src/ only)
+        uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
+        with:
+          min_coverage: ${{ inputs.min_coverage }}
+          path_prefix: "src/"
+          exclude_suffixes: ".t.sol"
+      - name: Save PR metadata
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s' "$PR_NUMBER" > /tmp/content/pr_number.txt
+          printf '%s' "$HEAD_SHA" > /tmp/content/head_sha.txt
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: content
+          path: /tmp/content

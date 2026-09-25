@@ -1,0 +1,137 @@
+name: coverage-gate
+description: >-
+  Runs forge coverage and fails if line coverage under a given src path
+  prefix (excluding test/script files) is below a threshold. Single
+  implementation shared by foundry-ci (whole src/) and proposal-checks
+  (payload files only).
+inputs:
+  min_coverage:
+    description: Integer 0-100. 0 skips the gate.
+    required: true
+  path_prefix:
+    description: "SF: path prefix in lcov.info to scope coverage to (e.g. src/)."
+    required: false
+    default: "src/"
+  exclude_suffixes:
+    description: "Space-separated SF: path suffixes to exclude even inside path_prefix (e.g. .t.sol scripts/)."
+    required: false
+    default: ".t.sol"
+  no_match_test:
+    description: >-
+      Optional forge --no-match-test regex, forwarded as-is. `forge coverage`
+      cannot run in --isolate mode, so any test relying on isolate-mode gas
+      metering (e.g. ProtocolV3TestBase.defaultTest's payload gas-limit check)
+      needs excluding here -- it is exercised by the plain `forge test` step
+      instead, where isolate is available.
+    required: false
+    default: ""
+outputs:
+  pct:
+    description: Measured line coverage percentage under path_prefix (empty if the gate was skipped).
+    value: ${{ steps.measure.outputs.pct }}
+  uncovered_sample:
+    description: Up to 15 "file:line" entries with zero hits under path_prefix, newline-separated.
+    value: ${{ steps.measure.outputs.uncovered_sample }}
+runs:
+  using: composite
+  steps:
+    # Split into measure (always succeeds) + enforce (fails the gate): a
+    # composite-action step that exits non-zero does not reliably propagate
+    # the outputs it wrote via GITHUB_OUTPUT beforehand (observed empirically
+    # -- "Set output 'pct'" never appears in the runner log for a failing
+    # step), so the threshold failure must live in a step AFTER outputs are
+    # already recorded by a step that exits 0.
+    - id: measure
+      shell: bash
+      env:
+        MIN_COVERAGE: ${{ inputs.min_coverage }}
+        PATH_PREFIX: ${{ inputs.path_prefix }}
+        EXCLUDE_SUFFIXES: ${{ inputs.exclude_suffixes }}
+        NO_MATCH_TEST: ${{ inputs.no_match_test }}
+      run: |
+        case "$MIN_COVERAGE" in
+          ''|*[!0-9]*) echo "min_coverage must be an integer 0-100, got: $MIN_COVERAGE"; exit 1 ;;
+        esac
+        if [ "$MIN_COVERAGE" -gt 100 ]; then
+          echo "min_coverage must be 0-100, got: $MIN_COVERAGE"; exit 1
+        fi
+        if [ "$MIN_COVERAGE" -eq 0 ]; then
+          echo "min_coverage not set; skipping coverage gate"
+          echo "pct=" >> "$GITHUB_OUTPUT"
+          echo "uncovered_sample=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ -n "$NO_MATCH_TEST" ]; then
+          forge coverage --report lcov --report-file lcov.info --no-match-test "$NO_MATCH_TEST"
+        else
+          forge coverage --report lcov --report-file lcov.info
+        fi
+        covered=0
+        total=0
+        in_scope=0
+        current_file=""
+        uncovered_sample=""
+        uncovered_count=0
+        while IFS= read -r line; do
+          case "$line" in
+            SF:*)
+              current_file="${line#SF:}"
+              in_scope=0
+              case "$current_file" in
+                "$PATH_PREFIX"*)
+                  in_scope=1
+                  for suf in $EXCLUDE_SUFFIXES; do
+                    case "$current_file" in
+                      *"$suf") in_scope=0 ;;
+                    esac
+                  done
+                  ;;
+              esac
+              ;;
+            LH:*) [ "$in_scope" -eq 1 ] && covered=$((covered + ${line#LH:})) ;;
+            LF:*) [ "$in_scope" -eq 1 ] && total=$((total + ${line#LF:})) ;;
+            DA:*)
+              if [ "$in_scope" -eq 1 ] && [ "$uncovered_count" -lt 15 ]; then
+                da="${line#DA:}"
+                lno="${da%%,*}"
+                hits="${da#*,}"
+                hits="${hits%%,*}"
+                if [ "$hits" = "0" ]; then
+                  uncovered_sample="${uncovered_sample}${current_file}:${lno}$(printf '\n')"
+                  uncovered_count=$((uncovered_count + 1))
+                fi
+              fi
+              ;;
+          esac
+        done < lcov.info
+        # base64-encoded single-line output: the multi-line `name<<EOF ... EOF`
+        # form was observed to fail delimiter matching on this runner
+        # ("Invalid value. Matching delimiter not found") for non-trivial
+        # content, silently dropping the output. base64 sidesteps that
+        # entirely; the summary job decodes it back.
+        echo "uncovered_sample=$(printf '%s' "$uncovered_sample" | base64 -w0)" >> "$GITHUB_OUTPUT"
+        if [ "$total" -eq 0 ]; then
+          echo "pct=" >> "$GITHUB_OUTPUT"
+          echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"
+          echo "status=no-data" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        pct=$((covered * 100 / total))
+        echo "pct=$pct" >> "$GITHUB_OUTPUT"
+        echo "$PATH_PREFIX line coverage: $pct% ($covered/$total lines), threshold: $MIN_COVERAGE%"
+        if [ "$pct" -lt "$MIN_COVERAGE" ]; then
+          echo "status=below-threshold" >> "$GITHUB_OUTPUT"
+        else
+          echo "status=ok" >> "$GITHUB_OUTPUT"
+        fi
+    - id: enforce
+      shell: bash
+      env:
+        STATUS: ${{ steps.measure.outputs.status }}
+      run: |
+        case "$STATUS" in
+          ok|"") exit 0 ;;
+          no-data) echo "no coverage data found in scope"; exit 1 ;;
+          below-threshold) echo "coverage is below the required threshold"; exit 1 ;;
+          *) echo "unexpected coverage-gate status: $STATUS"; exit 1 ;;
+        esac

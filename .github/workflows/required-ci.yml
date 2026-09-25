@@ -1,0 +1,18 @@
+name: required-ci
+# Entry point for an organisation ruleset ("Require workflows to pass before merging"):
+# repositories under the ruleset hold no workflow files, so this file supplies the trigger.
+# Rulesets can't pass per-repo inputs, so foundry-ci runs with its defaults.
+on:
+  pull_request:
+  merge_group:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ci:
+    if: github.repository != 'TokenLogic-com-au/github-workflows'
+    uses: TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@main
+    secrets:
+      ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+      QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}

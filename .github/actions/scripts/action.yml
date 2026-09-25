@@ -1,0 +1,10 @@
+name: scripts
+description: >-
+  Exposes this repo's root (the scripts callers fetch) as $GW. GitHub fetches
+  this action itself when a workflow references it by owner/repo/path@ref, so
+  no checkout step or token is needed even from a caller repo.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "GW=$(realpath "${{ github.action_path }}/../../..")" >> "$GITHUB_ENV"

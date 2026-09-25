@@ -1,0 +1,14 @@
+name: report
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+jobs:
+  comment:
+    permissions:
+      pull-requests: write
+      actions: read
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/report-comment.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      workflow-name: ci
+      dry_run: true

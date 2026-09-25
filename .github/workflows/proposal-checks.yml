@@ -1,0 +1,484 @@
+name: proposal-checks
+# Blocking: address-book (#5), spelling (#2), coverage (#4).
+# Advisory (never blocks): forum-vs-diff spec check (#3) + decimals sanity (#1),
+# posted as one PR comment, AI output never treated as approval.
+on:
+  workflow_call:
+    inputs:
+      min_coverage:
+        type: number
+        default: 100
+      backend:
+        type: string
+        default: openrouter
+      dry_run:
+        type: boolean
+        default: true
+    secrets:
+      RPC_MAINNET:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+permissions: {}
+defaults:
+  run:
+    shell: bash
+env:
+  MARKER: "<!-- github-workflows-proposal-spec -->"
+jobs:
+  address-book:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      details: ${{ steps.measure.outputs.details }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Find unrecognized raw addresses
+        id: measure
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
+          # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
+          # ignored -- they document an address, they don't use one on-chain.
+          # Upstream aave-proposals-v3 pins aave-address-book only as a nested
+          # submodule of aave-helpers (lib/aave-helpers/lib/aave-address-book) -- a
+          # second, independently-pinned top-level copy caused a real forge remapping
+          # clash against aave-helpers' own ProtocolV3TestBase, so this replica
+          # follows upstream's single-copy layout.
+          #
+          # This step always exits 0 (see "enforce" below): a step that exits
+          # non-zero here was observed to lose its GITHUB_OUTPUT writes on this
+          # runner (a `grep -q`-closed-early pipe threw a broken-pipe SIGPIPE
+          # under `set -o pipefail`, and the resulting non-zero exit corrupted
+          # the multi-line output write) -- splitting measurement (always
+          # succeeds) from enforcement (fails the job) avoids that class of bug
+          # entirely, same fix as coverage-gate's measure/enforce split.
+          book=$(find lib/aave-helpers/lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
+          if [ -z "$book" ]; then
+            echo "lib/aave-helpers/lib/aave-address-book not found; is the submodule checked out recursively?"
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            echo "details=$(printf '%s' 'address book not found' | base64 -w0)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          book_text_lc=$(cat $book | tr 'A-F' 'a-f')
+          fail=0
+          details=""
+          while IFS= read -r hit; do
+            [ -z "$hit" ] && continue
+            file="${hit%%:*}"
+            rest="${hit#*:}"
+            lineno="${rest%%:*}"
+            addr="${rest#*:}"
+            addr_lc=$(printf '%s' "$addr" | tr 'A-F' 'a-f')
+            case "$book_text_lc" in
+              *"$addr_lc"*) ;;
+              *)
+                echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+                details="${details}${file}|${lineno}|raw address ${addr} not in the address book$(printf '\n')"
+                fail=1
+                ;;
+            esac
+          done < <(
+            git diff -U0 "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.sol' ':!src/**/*.t.sol' \
+              | awk '
+                  /^\+\+\+ b\// { file=substr($0,7); next }
+                  /^@@/ { split($0,a,"+"); split(a[2],b,","); line=b[1]+0; next }
+                  /^\+/ {
+                    content = substr($0,2)
+                    sub(/\/\/.*/, "", content)
+                    if (match(content, /0x[0-9a-fA-F]{40}/)) {
+                      print file ":" line ":" substr(content, RSTART, RLENGTH)
+                    }
+                    line++
+                    next
+                  }
+                '
+          )
+          echo "details=$(printf '%s' "$details" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          if [ "$fail" -eq 0 ]; then
+            echo "no new unrecognized addresses"
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=found" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Enforce
+        env:
+          STATUS: ${{ steps.measure.outputs.status }}
+        run: |
+          case "$STATUS" in
+            ok) exit 0 ;;
+            found) echo "unrecognized raw addresses found"; exit 1 ;;
+            *) echo "address-book check errored: $STATUS"; exit 1 ;;
+          esac
+
+  spelling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      details: ${{ steps.check.outputs.details }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: cspell on changed proposal .md files
+        id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Picked cspell over rojopolis/spellcheck-github-actions: rojopolis'
+          # pyspelling config takes static source globs, so limiting it to only
+          # this PR's changed files means rewriting its config every run.
+          # cspell takes a file list straight from argv, so `git diff
+          # --name-only` feeds it directly, and -c points at config that lives
+          # in github-workflows (checked out above), not duplicated per repo.
+          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.md')
+          if [ -z "$files" ]; then
+            echo "no changed proposal .md files"; exit 0
+          fi
+          set +e
+          npx -y cspell@9.2.1 --no-progress -c "$GW/cspell.json" $files > cspell-out.txt 2>&1
+          status=$?
+          set -e
+          cat cspell-out.txt
+          detail=""
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r hit; do
+              [ -z "$hit" ] && continue
+              hfile="${hit%%:*}"
+              rest="${hit#*:}"
+              hline="${rest%%:*}"
+              rest="${rest#*:}"
+              rest="${rest#*- }"
+              word=$(printf '%s' "$rest" | sed -n 's/.*Unknown word (\([^)]*\)).*/\1/p')
+              sugg=$(printf '%s' "$rest" | sed -n 's/.*fix: (\([^)]*\)).*/\1/p')
+              context=$(sed -n "${hline}p" "$hfile" 2>/dev/null | cut -c1-80)
+              detail="${detail}${hfile}|${hline}|${word}|${sugg}|${context}$(printf '\n')"
+            done < <(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
+          fi
+          echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          exit $status
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Upstream aave-proposals-v3 runs its forge tests under [profile.test]
+      # (evm_version = 'prague'); the default profile stays on 'shanghai' for
+      # deploy artifacts. Payload asset contracts on live mainnet now contain
+      # post-shanghai opcodes (e.g. weETH's TLOAD/TSTORE/MCOPY), so any forge
+      # invocation that touches live-fork state must run under the test
+      # profile or it reverts with EvmError: NotActivated.
+      FOUNDRY_PROFILE: test
+    outputs:
+      pct: ${{ steps.gate.outputs.pct }}
+      uncovered_sample: ${{ steps.gate.outputs.uncovered_sample }}
+      min_coverage: ${{ inputs.min_coverage }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - run: forge build --deny notes
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+      - name: Coverage threshold (payload contracts only)
+        id: gate
+        uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
+        with:
+          min_coverage: ${{ inputs.min_coverage }}
+          path_prefix: "src/"
+          exclude_suffixes: ".t.sol scripts/"
+          no_match_test: "test_defaultProposalExecution"
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+
+  advisory:
+    runs-on: ubuntu-latest
+    if: github.event.repository.private
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      # See the matching comment on the coverage job: forge test/coverage
+      # against live-fork mainnet state needs upstream's [profile.test]
+      # (evm_version = 'prague') to handle payload assets whose deployed
+      # bytecode uses post-shanghai opcodes.
+      FOUNDRY_PROFILE: test
+    outputs:
+      comment_url: ${{ steps.post.outputs.comment_url }}
+      has_issues: ${{ steps.post.outputs.has_issues }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - name: Recency gate
+        id: gate
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cutoff=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ)
+          last=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.updated_at]|max // empty')
+          if [ -z "$last" ] || [[ "$last" < "$cutoff" ]]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Find the changed proposal folder
+        id: folder
+        if: steps.gate.outputs.run == '1'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The changed proposal folder is whichever src/<folder>/ has ANY changed
+          # file (.sol/.t.sol/.md) -- a case that only edits the payload .sol (no .md
+          # change) must still resolve to that folder's (unchanged) .md, or the
+          # advisory step has nothing to compare against and silently no-ops.
+          dir=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/*/*' | head -1 | xargs -r dirname)
+          if [ -z "$dir" ]; then
+            echo "no changed proposal folder in this PR; skipping advisory step"
+            echo "md=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          md=$(find "$dir" -maxdepth 1 -name '*.md' | head -1)
+          if [ -z "$md" ]; then
+            echo "changed folder $dir has no .md; skipping advisory step"
+            echo "md=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "md=$md" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+      - name: Fetch forum raw text
+        id: forum
+        if: steps.folder.outputs.md != ''
+        run: |
+          url=$(sed -n 's/^discussions:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "${{ steps.folder.outputs.md }}" | head -1)
+          topic=$(echo "$url" | grep -oE '[0-9]+/?$' | tr -d '/')
+          if [ -z "$topic" ]; then
+            echo "could not parse a topic id from discussions: $url"; echo "" > forum.txt
+          else
+            curl -fsSL "https://governance.aave.com/raw/$topic/1" -o forum.txt || echo "(forum fetch failed)" > forum.txt
+          fi
+      - name: Generate the fork diff report
+        id: diff
+        if: steps.folder.outputs.md != ''
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+        run: |
+          # Like upstream aave-proposals-v3, the author commits diffs/*.md
+          # generated locally by the fork test -- so check the committed repo
+          # state FIRST, and only fall back to regenerating in CI (which needs
+          # --isolate, not just the forge-config annotation, for
+          # ProtocolV3TestBase.defaultTest's payload gas-limit check to pass;
+          # without it the check reverts before diffReports() ever writes a
+          # file) when nothing was committed.
+          proposal_name=$(basename "${{ steps.folder.outputs.dir }}" | sed -E 's/^[0-9]{8}_//')
+          committed=$(find diffs -name "*${proposal_name}*.md" 2>/dev/null | sort | tail -1 || true)
+          if [ -n "$committed" ]; then
+            echo "using committed diff report: $committed"
+            echo "report=$committed" >> "$GITHUB_OUTPUT"
+            echo "source=committed" >> "$GITHUB_OUTPUT"
+            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "no committed diff report found for $proposal_name; regenerating in CI"
+          forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
+          mkdir -p diffs
+          report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1 || true)
+          if [ -z "$report" ]; then
+            report=$(find diffs -name '*.md' 2>/dev/null | sort | tail -1 || true)
+          fi
+          echo "report=${report:-}" >> "$GITHUB_OUTPUT"
+          echo "source=regenerated" >> "$GITHUB_OUTPUT"
+          # No report written -- the fork test itself failed (e.g. a payload
+          # asset's live-mainnet bytecode reverting under the wrong forge
+          # profile). Name the failing test so the advisory comment can say
+          # plainly "the fork test failed" instead of a vague "may not have
+          # completed".
+          if [ -z "$report" ]; then
+            fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
+            echo "fork_test_status=${fail_test:-forge test failed with no further detail}" >> "$GITHUB_OUTPUT"
+          else
+            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: steps.diff.outputs.source == 'regenerated' && steps.diff.outputs.report != ''
+        with:
+          name: regenerated-diffs
+          path: diffs/
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+        if: steps.folder.outputs.md != ''
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.folder.outputs.md != ''
+        with:
+          python-version: "3.12"
+      - name: Trim forum text to its Specification/Motivation section(s)
+        if: steps.folder.outputs.md != ''
+        run: |
+          # Cuts token usage on long funding-update posts that cover many
+          # payloads; falls back to the full post if no matching heading.
+          python3 "$GW/forum_trim.py" forum.txt > forum.trimmed.txt
+          mv forum.trimmed.txt forum.txt
+      - name: Build AI input
+        if: steps.folder.outputs.md != ''
+        run: |
+          {
+            echo "<forum>"; cat forum.txt; echo "</forum>"
+            echo "<proposal-md>"; cat "${{ steps.folder.outputs.md }}"; echo "</proposal-md>"
+            echo "<diff-report>"
+            [ -n "${{ steps.diff.outputs.report }}" ] && cat "${{ steps.diff.outputs.report }}"
+            echo "</diff-report>"
+          } > input.txt
+      - name: Run spec-check AI call
+        if: steps.folder.outputs.md != ''
+        env:
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          AI_API_STYLE: openai
+          AI_API_URL: https://openrouter.ai/api/v1/chat/completions
+          AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          AI_MAX_TOKENS: "8000"
+          AI_REASONING_EFFORT: "low"
+          AI_RESPONSE_FORMAT: "json_object"
+        run: |
+          # This is an advisory-only step: an AI-side failure (truncation, API
+          # error, timeout) must never turn the job red -- under a ruleset that
+          # would block a merge on the AI provider's flakiness, not on anything
+          # about the proposal. Log the failure into the comment instead.
+          if ! python3 "$GW/ai.py" spec-check input.txt ai-out.md; then
+            echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ../ai-out.md
+          fi
+      - name: Deterministic decimals-scale check
+        if: steps.folder.outputs.md != ''
+        run: |
+          if [ -n "${{ steps.diff.outputs.report }}" ]; then
+            python3 "$GW/scale_check.py" "${{ steps.diff.outputs.report }}" > scale-out.txt || true
+          else
+            echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
+          fi
+      - name: Post one advisory comment
+        id: post
+        if: steps.folder.outputs.md != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          DIFF_SOURCE: ${{ steps.diff.outputs.source }}
+          FORK_TEST_STATUS: ${{ steps.diff.outputs.fork_test_status }}
+        run: |
+          if [ "$DRY_RUN" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
+            exit 0
+          fi
+          diff_report_path="${{ steps.diff.outputs.report }}"
+          printf '%s' "$FORK_TEST_STATUS" > fork-status.txt
+          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt
+          if [ "$DIFF_SOURCE" = "committed" ]; then
+            diff_note="_Diff report: committed by the author._"
+          else
+            diff_note="_Diff report: regenerated in CI (none was committed)._"
+          fi
+          { printf '%s\n' "$MARKER"; printf '%s\n\n' "$diff_note"; cat body.md; } > comment.md
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
+          if [ -n "$existing" ]; then
+            comment_id=$(gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@comment.md --jq .id)
+          else
+            comment_id=$(gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md --jq .id)
+          fi
+          echo "comment_url=${{ github.event.pull_request.html_url }}#issuecomment-$comment_id" >> "$GITHUB_OUTPUT"
+          if grep -qE '\[!(WARNING|CAUTION)\]' body.md; then
+            echo "has_issues=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_issues=0" >> "$GITHUB_OUTPUT"
+          fi
+
+  summary:
+    needs: [address-book, spelling, coverage, advisory]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      SUMMARY_MARKER: "<!-- github-workflows-proposal-summary -->"
+    steps:
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Post the check summary comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          RESULT_ADDRESS_BOOK: ${{ needs.address-book.result }}
+          RESULT_SPELLING: ${{ needs.spelling.result }}
+          RESULT_COVERAGE: ${{ needs.coverage.result }}
+          RESULT_ADVISORY: ${{ needs.advisory.result }}
+          DETAILS_ADDRESS_BOOK: ${{ needs.address-book.outputs.details }}
+          DETAILS_SPELLING: ${{ needs.spelling.outputs.details }}
+          DETAILS_COVERAGE: ${{ needs.coverage.outputs.uncovered_sample }}
+          COVERAGE_PCT: ${{ needs.coverage.outputs.pct }}
+          COVERAGE_MIN: ${{ needs.coverage.outputs.min_coverage }}
+          ADVISORY_URL: ${{ needs.advisory.outputs.comment_url }}
+          ADVISORY_HAS_ISSUES: ${{ needs.advisory.outputs.has_issues }}
+          REPO_FULL: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # details/uncovered_sample are base64 on the wire (see the
+          # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
+          # writes were observed to fail delimiter matching on this runner.
+          ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
+          sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
+          cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
+          jq -n \
+            --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
+            --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
+            --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
+            --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
+            --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
+            '{
+              results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
+              advisory_has_issues: ($adv_issues == "1"),
+              repo: $repo, head_sha: $head_sha,
+              details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
+              coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
+            }' > summary_payload.json
+          python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
+            echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
+          if [ "$DRY_RUN" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"proposal-summary-comment",number:$n}' >&2
+            exit 0
+          fi
+          { printf '%s\n' "$SUMMARY_MARKER"; cat summary_body.md; } > summary_comment.md
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$SUMMARY_MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty') || true
+          if [ -n "$existing" ]; then
+            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@summary_comment.md || true
+          else
+            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@summary_comment.md || true
+          fi

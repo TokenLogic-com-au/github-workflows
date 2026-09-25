@@ -1,0 +1,60 @@
+name: review-ping
+on:
+  workflow_call:
+    inputs:
+      discord_bot_ref:
+        required: true
+        type: string
+      dry_run:
+        type: boolean
+        default: true
+    secrets:
+      DISCORD_BOT_TOKEN:
+        required: true
+permissions: {}
+defaults:
+  run:
+    shell: bash
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+    steps:
+      - name: Validate required org variables
+        run: |
+          if [ -z "${{ vars.BOT_REPO }}" ]; then
+            echo "Error: review-ping requires vars.BOT_REPO to be set"
+            exit 1
+          fi
+      - name: Mint read-only app token
+        id: mint
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.BOT_REPO }}
+          permission-contents: read
+      - name: Check out the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
+          ref: ${{ inputs.discord_bot_ref }}
+          path: bot-tool
+          token: ${{ steps.mint.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run review_ping.py
+        env:
+          REVIEWER: ${{ github.event.requested_reviewer.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: python3 bot-tool/review_ping.py

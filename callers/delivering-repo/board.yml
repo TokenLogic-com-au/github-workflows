@@ -1,0 +1,29 @@
+name: board
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, review_requested, review_request_removed, closed]
+  pull_request_review:
+    types: [submitted, dismissed]
+jobs:
+  check:
+    if: contains(fromJson('["opened","synchronize","reopened","edited"]'), github.event.action) && github.event.pull_request.base.ref == github.event.repository.default_branch
+    permissions:
+      contents: read
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/pr-board.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      command: pr-issue-check
+      board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
+      dry_run: true
+    secrets:
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+  sync:
+    if: "!contains(fromJson('[\"opened\",\"synchronize\",\"reopened\",\"edited\"]'), github.event.action)"
+    permissions:
+      contents: read
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/pr-board.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      command: pr-sync
+      board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
+      dry_run: true
+    secrets:
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
