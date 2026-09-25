@@ -15,7 +15,11 @@ on:
         type: boolean
         default: true
     secrets:
-      RPC_MAINNET:
+      ALCHEMY_API_KEY:
+        required: true
+      QUICKNODE_TOKEN:
+        required: false
+      QUICKNODE_ENDPOINT_NAME:
         required: false
       OPENROUTER_API_KEY:
         required: false
@@ -248,6 +252,11 @@ jobs:
         with:
           submodules: recursive
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
+        with:
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+          QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
       # No separate `forge build --deny notes` here: upstream aave-proposals-v3
       # code compiles with warnings we don't own, and `forge coverage` compiles
       # anyway (a second full compile only doubled the job time).
@@ -260,8 +269,6 @@ jobs:
           exclude_suffixes: ".t.sol scripts/"
           no_match_test: "test_defaultProposalExecution"
           match_path: "${{ needs.scope.outputs.dir }}/*.t.sol"
-        env:
-          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
 
   advisory:
     needs: scope
@@ -286,6 +293,11 @@ jobs:
           submodules: recursive
           fetch-depth: 0
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
+        with:
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+          QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
       - name: Recency gate
         id: gate
         continue-on-error: true
@@ -332,8 +344,6 @@ jobs:
       - name: Generate the fork diff report
         id: diff
         if: steps.folder.outputs.md != ''
-        env:
-          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
         run: |
           # Like upstream aave-proposals-v3, the author commits diffs/*.md
           # generated locally by the fork test -- so check the committed repo

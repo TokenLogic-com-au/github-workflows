@@ -16,5 +16,7 @@ jobs:
       backend: openrouter
       dry_run: true
     secrets:
-      RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+      ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+      QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
