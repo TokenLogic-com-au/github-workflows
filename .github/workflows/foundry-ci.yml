@@ -16,6 +16,8 @@ permissions: {}
 defaults:
   run:
     shell: bash
+env:
+  FOUNDRY_VERSION: v1.7.1
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,6 +29,8 @@ jobs:
         with:
           submodules: recursive
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        with:
+          FOUNDRY_VERSION: ${{ env.FOUNDRY_VERSION }}
       - run: forge fmt --check
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:

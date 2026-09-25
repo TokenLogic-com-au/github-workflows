@@ -29,6 +29,7 @@ defaults:
     shell: bash
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
+  FOUNDRY_VERSION: v1.7.1
 jobs:
   scope:
     # One proposal per PR: computes the single src/<dir>/ this PR touches so
@@ -252,6 +253,8 @@ jobs:
         with:
           submodules: recursive
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        with:
+          FOUNDRY_VERSION: ${{ env.FOUNDRY_VERSION }}
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
@@ -260,6 +263,7 @@ jobs:
       # No separate `forge build --deny notes` here: upstream aave-proposals-v3
       # code compiles with warnings we don't own, and `forge coverage` compiles
       # anyway (a second full compile only doubled the job time).
+      # Foundry version pinned to match upstream aave-proposals-v3 CI; newer Foundry refuses non-Ethereum forks in this setup.
       - name: Coverage threshold (payload contracts only)
         id: gate
         uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
@@ -293,6 +297,8 @@ jobs:
           submodules: recursive
           fetch-depth: 0
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        with:
+          FOUNDRY_VERSION: ${{ env.FOUNDRY_VERSION }}
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
