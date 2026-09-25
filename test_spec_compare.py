@@ -99,5 +99,87 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(len(out["unexplained"]), 1)
 
 
+class FormulaAmountTests(unittest.TestCase):
+    def test_formula_amount_is_not_compared_and_produces_a_note_not_a_warning(self):
+        forum = [{
+            "action": "Refresh Allowance", "asset": "USDC",
+            "amount": "currentAllowance + 50,500 / 4 + emissionPerSecond x (block.timestamp - snapshot + 90 days)",
+            "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum",
+        }]
+        payload = [{"amount": "71,532.10", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 6}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["unexplained"], [])
+        self.assertEqual(len(out["notes"]), 1)
+        self.assertIn("formula", out["notes"][0]["detail"])
+
+    def test_plain_literal_amount_is_not_treated_as_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "aEthLidoGHO", "amount": "50,000",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "50,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(out["warnings"], [])
+
+    def test_amount_with_a_token_symbol_is_not_a_formula_and_mismatches_are_still_caught(self):
+        # A token symbol (GHO, USDC, aEthWBTC, ...) trailing the number is
+        # not an identifier -- it must not suppress a real mismatch.
+        forum = [{"action": "Reimburse", "asset": "GHO", "amount": "50,000 GHO",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "35,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(len(out["warnings"]), 1)
+        self.assertIn("amount", out["warnings"][0]["detail"])
+
+    def test_scaled_amount_with_a_token_symbol_is_not_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "USDC", "amount": "1.5M USDC",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "1,500,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 6}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(out["warnings"], [])
+
+    def test_bare_token_symbol_amount_is_not_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "aEthWBTC", "amount": "72 aEthWBTC",
+                  "recipient": "0xAA2461f0f0A3dE5fEAF3273eAe16DEF861cf594e", "network": "Ethereum"}]
+        payload = [{"amount": "72", "recipient": "0xAA2461f0f0A3dE5fEAF3273eAe16DEF861cf594e", "decimals": 8}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(out["warnings"], [])
+
+    def test_multi_word_identifier_formula_still_produces_a_note(self):
+        forum = [{"action": "Reimburse", "asset": "stkAAVE", "amount": "Current Balance + buffer",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "1,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(len(out["notes"]), 1)
+
+    def test_amount_with_a_trailing_time_range_is_compared_not_treated_as_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "GHO", "amount": "10,000,000 GHO over 3 months",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "10,000,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(out["warnings"], [])
+
+    def test_amount_with_an_unspaced_rate_slash_is_compared_not_treated_as_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "GHO", "amount": "50k GHO/month",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "35,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(len(out["warnings"]), 1)
+
+    def test_amount_with_parenthesized_symbol_is_compared_not_treated_as_a_formula(self):
+        forum = [{"action": "Reimburse", "asset": "GHO", "amount": "50,000 (GHO)",
+                  "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}]
+        payload = [{"amount": "50,000", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["notes"], [])
+        self.assertEqual(out["warnings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

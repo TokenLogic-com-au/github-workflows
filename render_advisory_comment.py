@@ -63,6 +63,11 @@ def render_comparison_alerts(comparison: dict) -> str:
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if not comparison["unexplained"] and not comparison["warnings"]:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
+    if comparison.get("notes"):
+        lines = [
+            sanitize_markdown(f"> {n['label']}: {n['detail']}", 300) for n in comparison["notes"]
+        ]
+        blocks.append("> [!NOTE]\n" + "\n".join(lines))
     if comparison["forum_only_count"] > 0:
         blocks.append(
             f"<details><summary>{comparison['forum_only_count']} other forum items are not in this "
