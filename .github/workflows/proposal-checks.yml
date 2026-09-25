@@ -26,7 +26,57 @@ defaults:
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
 jobs:
+  scope:
+    # One proposal per PR: computes the single src/<dir>/ this PR touches so
+    # every other job scopes its checks to it instead of the whole repo (src/
+    # holds hundreds of past proposals, so an unscoped coverage/test run is
+    # both slow and fails 100% on old ones). count==0 short-circuits every
+    # other job to skipped (still a green required check -- GitHub treats a
+    # skipped job as passing); count>1 fails this job outright, which fails
+    # the required check.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      dir: ${{ steps.detect.outputs.dir }}
+      count: ${{ steps.detect.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Detect the changed proposal folder(s)
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          result=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | python3 "$GW/proposal_scope.py")
+          count=$(echo "$result" | jq -r .count)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          case "$count" in
+            0)
+              echo "no proposal folder changed in this PR; proposal checks skipped"
+              echo "dir=" >> "$GITHUB_OUTPUT"
+              ;;
+            1)
+              dir=$(echo "$result" | jq -r '.dirs[0]')
+              echo "dir=$dir" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              dirs=$(echo "$result" | jq -r '.dirs | join(", ")')
+              echo "::error::One proposal per PR: this PR changes $count proposal folders: $dirs"
+              echo "dir=" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+          esac
+
   address-book:
+    needs: scope
+    if: needs.scope.outputs.count == '1'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -118,6 +168,8 @@ jobs:
           esac
 
   spelling:
+    needs: scope
+    if: needs.scope.outputs.count == '1'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -171,6 +223,8 @@ jobs:
           exit $status
 
   coverage:
+    needs: scope
+    if: needs.scope.outputs.count == '1'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -199,15 +253,17 @@ jobs:
         uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
         with:
           min_coverage: ${{ inputs.min_coverage }}
-          path_prefix: "src/"
+          path_prefix: "${{ needs.scope.outputs.dir }}/"
           exclude_suffixes: ".t.sol scripts/"
           no_match_test: "test_defaultProposalExecution"
+          match_path: "${{ needs.scope.outputs.dir }}/*.t.sol"
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
 
   advisory:
+    needs: scope
+    if: needs.scope.outputs.count == '1'
     runs-on: ubuntu-latest
-    if: github.event.repository.private
     permissions:
       contents: read
       pull-requests: write
@@ -241,31 +297,24 @@ jobs:
           if [ -z "$last" ] || [[ "$last" < "$cutoff" ]]; then
             echo "run=1" >> "$GITHUB_OUTPUT"
           fi
-      - name: Find the changed proposal folder
+      - name: Find the proposal's .md
         id: folder
         if: steps.gate.outputs.run == '1'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DIR: ${{ needs.scope.outputs.dir }}
         run: |
-          # The changed proposal folder is whichever src/<folder>/ has ANY changed
-          # file (.sol/.t.sol/.md) -- a case that only edits the payload .sol (no .md
-          # change) must still resolve to that folder's (unchanged) .md, or the
-          # advisory step has nothing to compare against and silently no-ops.
-          dir=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/*/*' | head -1 | xargs -r dirname)
-          if [ -z "$dir" ]; then
-            echo "no changed proposal folder in this PR; skipping advisory step"
-            echo "md=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          md=$(find "$dir" -maxdepth 1 -name '*.md' | head -1)
+          # The folder itself came from the scope job (one source of truth for
+          # "which proposal folder did this PR change") -- this step only
+          # resolves its .md, which may be unchanged if the PR only touched
+          # the payload .sol.
+          md=$(find "$DIR" -maxdepth 1 -name '*.md' | head -1)
           if [ -z "$md" ]; then
-            echo "changed folder $dir has no .md; skipping advisory step"
+            echo "changed folder $DIR has no .md; skipping advisory step"
             echo "md=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "md=$md" >> "$GITHUB_OUTPUT"
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
       - name: Fetch forum raw text
         id: forum
         if: steps.folder.outputs.md != ''
@@ -414,8 +463,8 @@ jobs:
           fi
 
   summary:
-    needs: [address-book, spelling, coverage, advisory]
-    if: always()
+    needs: [scope, address-book, spelling, coverage, advisory]
+    if: always() && needs.scope.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -435,6 +484,7 @@ jobs:
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          SCOPE_COUNT: ${{ needs.scope.outputs.count }}
           RESULT_ADDRESS_BOOK: ${{ needs.address-book.result }}
           RESULT_SPELLING: ${{ needs.spelling.result }}
           RESULT_COVERAGE: ${{ needs.coverage.result }}
@@ -449,27 +499,31 @@ jobs:
           REPO_FULL: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # details/uncovered_sample are base64 on the wire (see the
-          # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
-          # writes were observed to fail delimiter matching on this runner.
-          ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
-          sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
-          cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
-          jq -n \
-            --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
-            --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
-            --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
-            --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
-            --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
-            '{
-              results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
-              advisory_has_issues: ($adv_issues == "1"),
-              repo: $repo, head_sha: $head_sha,
-              details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
-              coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
-            }' > summary_payload.json
-          python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
-            echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
+          if [ "$SCOPE_COUNT" = "0" ]; then
+            echo "No proposal folder changed in this PR; proposal checks skipped." > summary_body.md
+          else
+            # details/uncovered_sample are base64 on the wire (see the
+            # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
+            # writes were observed to fail delimiter matching on this runner.
+            ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
+            sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
+            cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
+            jq -n \
+              --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
+              --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
+              --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
+              --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
+              --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
+              '{
+                results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
+                advisory_has_issues: ($adv_issues == "1"),
+                repo: $repo, head_sha: $head_sha,
+                details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
+                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
+              }' > summary_payload.json
+            python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
+              echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
+          fi
           if [ "$DRY_RUN" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"proposal-summary-comment",number:$n}' >&2
             exit 0

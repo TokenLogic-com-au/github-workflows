@@ -25,6 +25,10 @@ inputs:
       instead, where isolate is available.
     required: false
     default: ""
+  match_path:
+    description: "Optional forge --match-path glob, forwarded as-is (e.g. src/<proposal-dir>/*.t.sol) to scope which tests run."
+    required: false
+    default: ""
 outputs:
   pct:
     description: Measured line coverage percentage under path_prefix (empty if the gate was skipped).
@@ -48,6 +52,7 @@ runs:
         PATH_PREFIX: ${{ inputs.path_prefix }}
         EXCLUDE_SUFFIXES: ${{ inputs.exclude_suffixes }}
         NO_MATCH_TEST: ${{ inputs.no_match_test }}
+        MATCH_PATH: ${{ inputs.match_path }}
       run: |
         case "$MIN_COVERAGE" in
           ''|*[!0-9]*) echo "min_coverage must be an integer 0-100, got: $MIN_COVERAGE"; exit 1 ;;
@@ -61,11 +66,10 @@ runs:
           echo "uncovered_sample=" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        if [ -n "$NO_MATCH_TEST" ]; then
-          forge coverage --report lcov --report-file lcov.info --no-match-test "$NO_MATCH_TEST"
-        else
-          forge coverage --report lcov --report-file lcov.info
-        fi
+        args=(--report lcov --report-file lcov.info)
+        [ -n "$NO_MATCH_TEST" ] && args+=(--no-match-test "$NO_MATCH_TEST")
+        [ -n "$MATCH_PATH" ] && args+=(--match-path "$MATCH_PATH")
+        forge coverage "${args[@]}"
         covered=0
         total=0
         in_scope=0
