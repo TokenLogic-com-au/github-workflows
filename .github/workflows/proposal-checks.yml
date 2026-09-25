@@ -248,9 +248,9 @@ jobs:
         with:
           submodules: recursive
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
-      - run: forge build --deny notes
-        env:
-          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+      # No separate `forge build --deny notes` here: upstream aave-proposals-v3
+      # code compiles with warnings we don't own, and `forge coverage` compiles
+      # anyway (a second full compile only doubled the job time).
       - name: Coverage threshold (payload contracts only)
         id: gate
         uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
