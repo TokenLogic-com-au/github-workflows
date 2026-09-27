@@ -1,0 +1,12 @@
+# Template for a delivering repo's own `.github/dependabot.yml` (NOT `.github/workflows/` --
+# Dependabot config lives at the repo root's `.github/` directory, read natively by GitHub, no
+# workflow_call and no caller/reusable-workflow split for this one).
+#
+# Starts with the github-actions ecosystem only (keeps pinned action SHAs current); add npm/pip
+# ecosystem blocks here, per repo, once that's needed -- not yet.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
