@@ -6,10 +6,13 @@ name: ai-progress-note
 #
 # Comments are only ever posted on issues in the tracker repo (vars.TRACKER_REPO, e.g.
 # General-Task) -- a board item that lives elsewhere is skipped with a logged reason, never
-# aborts the run. A linked PR can still live in any delivering repo: the mint step below asks
-# for no `repositories:` filter, so the token can read (not write) whatever repo the App is
-# installed on, and the issue's own cross-referenced-PR data (board-tool's issue-activity)
-# comes back complete regardless of which repo each PR is in.
+# aborts the run (the issue_repo != tracker check is a second guard on top of the token split
+# below, not a replacement for it).
+#
+# Two tokens, least privilege: `read` has no `repositories:` filter and read-only permissions
+# -- discovery (listing board issues, a linked PR in any delivering repo, existing notes) needs
+# to see the whole org, never write anything. `write` is scoped with `repositories:` to the
+# tracker repo alone and is the only token that ever calls a write endpoint (posting the note).
 on:
   workflow_call:
     inputs:
@@ -55,27 +58,35 @@ jobs:
             echo "Error: ai-progress-note requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
             exit 1
           fi
-      - name: Mint app token
-        id: mint
+      - name: Mint read-only app token (discovery)
+        id: mint-read
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           # No `repositories:` filter -- a linked PR referenced from the tracker issue can live
-          # in any delivering repo the App is installed on, and this token only needs read
-          # access to see it (the write below is always to the tracker repo; see the
-          # issue_repo != tracker check).
+          # in any delivering repo the App is installed on, and this token only reads.
           permission-contents: read
-          permission-issues: write
+          permission-issues: read
+          permission-pull-requests: read
           permission-organization-projects: read
+      - name: Mint write app token (tracker repo only)
+        id: mint-write
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.TRACKER_REPO }}
+          permission-issues: write
       - name: Check out the board app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
           ref: ${{ inputs.board_app_ref }}
           path: board-tool
-          token: ${{ steps.mint.outputs.token }}
+          token: ${{ steps.mint-read.outputs.token }}
           persist-credentials: false
       - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -83,17 +94,18 @@ jobs:
           python-version: "3.12"
       - name: List in-progress issues from the board
         env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          GH_TOKEN: ${{ steps.mint-read.outputs.token }}
           BOARD_CONFIG: ${{ inputs.config }}
         run: |
           python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "In Progress" > open-issues.json
           jq -c '.[]' open-issues.json > issues.ndjson
       - name: Summarize activity and post one advisory note per issue
         env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          GH_TOKEN: ${{ steps.mint-read.outputs.token }}
+          GH_TOKEN_WRITE: ${{ steps.mint-write.outputs.token }}
           BOARD_CONFIG: ${{ inputs.config }}
           BACKEND: ${{ inputs.backend }}
-          BOT_LOGIN: ${{ steps.mint.outputs.app-slug }}[bot]
+          BOT_LOGIN: ${{ steps.mint-write.outputs.app-slug }}[bot]
           TRACKER_REPO: ${{ github.repository_owner }}/${{ vars.TRACKER_REPO }}
           ANTHROPIC_API_KEY: ${{ inputs.backend == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
           AI_API_STYLE: ${{ inputs.backend == 'openrouter' && 'openai' || 'anthropic' }}
@@ -142,5 +154,5 @@ jobs:
               continue
             fi
             { printf '%s\n' "$MARKER"; cat "body-$number.md"; } > "comment-$number.md"
-            gh api "repos/$issue_repo/issues/$number/comments" -X POST -F body=@"comment-$number.md" >&2
+            GH_TOKEN="$GH_TOKEN_WRITE" gh api "repos/$issue_repo/issues/$number/comments" -X POST -F body=@"comment-$number.md" >&2
           done < issues.ndjson

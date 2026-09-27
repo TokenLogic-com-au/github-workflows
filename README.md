@@ -46,16 +46,24 @@ app and/or bot repos by name, and need `vars.TRACKER_REPO`/`vars.BOARD_APP_REPO`
 `vars.BOT_REPO` set the same way as the workflows above. `no-reviewer-reminder.yml`
 mints its app token with no `repositories:` filter, since a candidate PR can live
 in any repo the App is installed on, not just the tracker/board-app/bot repos.
+`ai-progress-note.yml` mints two tokens instead of one: a read-only token with no
+`repositories:` filter for discovery (listing board issues, a linked PR in any
+delivering repo, existing notes), and a write token scoped with `repositories:`
+to the tracker repo alone, used only to post the note -- least privilege, on top
+of (not instead of) the in-script check that the issue lives in the tracker repo.
 
 Their `callers/tracker-*.yml` templates run on both a schedule and
 `workflow_dispatch`; a dispatched run honours its own `dry_run` input either
 way, but a *scheduled* run has no input to read, so each caller gates its
-schedule's live/dry switch on an org variable instead -- `vars.AI_NOTE_LIVE`
-for `tracker-ai-progress-note.yml`, `vars.DISCORD_LIVE` for
-`tracker-no-reviewer-reminder.yml` (the same variable board-discord-bot's own
-`callers/general-task/scheduled.yml` uses for its Discord writes). Absent or
-anything other than the literal `"true"` stays dry; there is no default that
-goes live.
+schedule's live/dry switch on its own org variable instead -- `vars.AI_NOTE_LIVE`
+for `tracker-ai-progress-note.yml`, `vars.REVIEW_REMINDER_LIVE` for
+`tracker-no-reviewer-reminder.yml`. Each job gets its own variable (not
+`vars.DISCORD_LIVE`, board-discord-bot's own switch for its nudge/stale jobs)
+so that switching one scheduled job live never also switches another one on;
+`no-reviewer-reminder` in particular pings hourly and posts a marker comment on
+every PR it reminds, so it needs its own dedicated switch more than most.
+Absent or anything other than the literal `"true"` stays dry; there is no
+default that goes live.
 
 ## Dependabot
 
