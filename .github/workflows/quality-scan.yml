@@ -160,3 +160,19 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: python3 bot-tool/issue_quality.py batch results.json
+      - name: Missing-fields digest (advisory job summary)
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          BOARD_CONFIG: ${{ inputs.config }}
+          STATUSES: ${{ inputs.statuses }}
+        run: |
+          python3 board-tool/board.py missing-fields --config "$BOARD_CONFIG" --status "$STATUSES" > missing-fields.json
+          {
+            echo "## Missing required board fields (advisory)"
+            echo
+            if [ "$(jq 'length' missing-fields.json)" = "0" ]; then
+              echo "No open, scanned issue is missing a required field."
+            else
+              jq -r 'to_entries[] | "### \(.key)\n" + ([.value[] | "- [#\(.number) \(.title)](\(.url))"] | join("\n")) + "\n"' missing-fields.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
