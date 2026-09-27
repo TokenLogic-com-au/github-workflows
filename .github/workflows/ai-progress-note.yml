@@ -3,6 +3,13 @@ name: ai-progress-note
 # since the issue's last progress note into one advisory comment. Reuses ai.py (kind:
 # progress) and render_ai_comment.py's rendering/footer. Skips an issue with no activity
 # since its last note (or, for an issue never noted, since it was created).
+#
+# Comments are only ever posted on issues in the tracker repo (vars.TRACKER_REPO, e.g.
+# General-Task) -- a board item that lives elsewhere is skipped with a logged reason, never
+# aborts the run. A linked PR can still live in any delivering repo: the mint step below asks
+# for no `repositories:` filter, so the token can read (not write) whatever repo the App is
+# installed on, and the issue's own cross-referenced-PR data (board-tool's issue-activity)
+# comes back complete regardless of which repo each PR is in.
 on:
   workflow_call:
     inputs:
@@ -55,7 +62,11 @@ jobs:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }}
+          # No `repositories:` filter -- a linked PR referenced from the tracker issue can live
+          # in any delivering repo the App is installed on, and this token only needs read
+          # access to see it (the write below is always to the tracker repo; see the
+          # issue_repo != tracker check).
+          permission-contents: read
           permission-issues: write
           permission-organization-projects: read
       - name: Check out the board app
@@ -82,6 +93,8 @@ jobs:
           GH_TOKEN: ${{ steps.mint.outputs.token }}
           BOARD_CONFIG: ${{ inputs.config }}
           BACKEND: ${{ inputs.backend }}
+          BOT_LOGIN: ${{ steps.mint.outputs.app-slug }}[bot]
+          TRACKER_REPO: ${{ github.repository_owner }}/${{ vars.TRACKER_REPO }}
           ANTHROPIC_API_KEY: ${{ inputs.backend == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
           AI_API_STYLE: ${{ inputs.backend == 'openrouter' && 'openai' || 'anthropic' }}
           AI_API_URL: ${{ inputs.backend == 'openrouter' && 'https://openrouter.ai/api/v1/chat/completions' || '' }}
@@ -96,8 +109,12 @@ jobs:
             body=$(printf '%s' "$issue" | jq -r .body)
             issue_repo=$(printf '%s' "$issue" | jq -r \
               '.url | capture("github\\.com/(?<o>[^/]+)/(?<r>[^/]+)/issues") | "\(.o)/\(.r)"')
-            since=$(gh api --paginate "repos/$issue_repo/issues/$number/comments" | jq -rs --arg m "$MARKER" \
-              '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))]|sort_by(.updated_at)|last|.updated_at // empty')
+            if [ "$issue_repo" != "$TRACKER_REPO" ]; then
+              echo "issue #$number lives in $issue_repo, not the tracker repo ($TRACKER_REPO); skipping" >&2
+              continue
+            fi
+            since=$(gh api --paginate "repos/$issue_repo/issues/$number/comments" | jq -rs --arg m "$MARKER" --arg bot "$BOT_LOGIN" \
+              '[.[][]|select(.user.login==$bot and (.body|contains($m)))]|sort_by(.updated_at)|last|.updated_at // empty')
             activity_args=(issue-activity --config "$BOARD_CONFIG" --repo "$issue_repo" "$number")
             [ -n "$since" ] && activity_args+=(--since "$since")
             python3 board-tool/board.py "${activity_args[@]}" > "activity-$number.json"
