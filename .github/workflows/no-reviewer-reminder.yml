@@ -57,6 +57,7 @@ jobs:
           # No `repositories:` filter -- PRs needing a reminder or a dedupe comment can live in
           # any repo the App is installed on, not just board-tool/bot-tool (checked out below by
           # name, not by access scope).
+          permission-contents: read
           permission-pull-requests: write
       - name: Check out the board app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,13 +86,14 @@ jobs:
       - name: Drop PRs already reminded
         env:
           GH_TOKEN: ${{ steps.mint.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint.outputs.app-slug }}[bot]
         run: |
           items="[]"
           while IFS= read -r pr; do
             repo=$(printf '%s' "$pr" | jq -r .repo)
             number=$(printf '%s' "$pr" | jq -r .number)
             existing=$(gh api --paginate "repos/${{ github.repository_owner }}/$repo/issues/$number/comments" \
-              | jq -rs --arg m "$MARKER" '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))]|length')
+              | jq -rs --arg m "$MARKER" --arg bot "$BOT_LOGIN" '[.[][]|select(.user.login==$bot and (.body|contains($m)))]|length')
             if [ "$existing" != "0" ]; then
               echo "PR $repo#$number already reminded; skipping" >&2
               continue
