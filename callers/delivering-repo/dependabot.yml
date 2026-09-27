@@ -2,11 +2,15 @@
 # Dependabot config lives at the repo root's `.github/` directory, read natively by GitHub, no
 # workflow_call and no caller/reusable-workflow split for this one).
 #
-# Starts with the github-actions ecosystem only (keeps pinned action SHAs current); add npm/pip
-# ecosystem blocks here, per repo, once that's needed -- not yet.
+# Covers github-actions and gitsubmodule (forge libraries) on weekly schedule. npm is intentionally
+# left out (aave-address-book disabled it: updates spammed the repo).
 version: 2
 updates:
   - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gitsubmodule"
     directory: "/"
     schedule:
       interval: "weekly"

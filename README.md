@@ -69,9 +69,9 @@ default that goes live.
 
 `callers/delivering-repo/dependabot.yml` is a template for a delivering repo's
 own `.github/dependabot.yml` (not `.github/workflows/` -- Dependabot config is
-read natively by GitHub, no reusable-workflow/caller split). Starts with the
-`github-actions` ecosystem only (weekly), to keep pinned action SHAs current;
-add `npm`/`pip` ecosystem blocks per repo once that's needed.
+read natively by GitHub, no reusable-workflow/caller split). Covers `github-actions`
+and `gitsubmodule` (forge libraries) on weekly schedule; npm is left out on purpose
+(aave-address-book disabled it: updates spammed the repo).
 
 ## Reusable action: `coverage-gate`
 
