@@ -1,0 +1,25 @@
+name: no-reviewer-reminder
+on:
+  schedule:
+    # Hourly: the threshold (config `no_reviewer_hours`, default 24h) is what controls how
+    # stale a PR must be before it's flagged, not the schedule's own granularity -- hourly
+    # just keeps that boundary tight without adding scheduling complexity.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+jobs:
+  remind:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/no-reviewer-reminder.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJson(inputs.dry_run) || true }}
+      board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
+      discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
+    secrets:
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
