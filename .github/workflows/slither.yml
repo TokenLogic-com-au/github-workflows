@@ -1,0 +1,65 @@
+name: slither
+# Advisory-only static analysis for Foundry repos: runs Slither and uploads its findings as
+# code-scanning annotations. Never blocks a PR or a merge -- every step that can fail is
+# `continue-on-error: true`, and there is no coverage-gate-style threshold to fail against.
+on:
+  workflow_call:
+    inputs:
+      slither_version:
+        description: Slither release to install (pinned; never "latest")
+        type: string
+        default: "0.10.4"
+      target:
+        description: Path Slither analyzes, relative to the repo root
+        type: string
+        default: "."
+permissions: {}
+defaults:
+  run:
+    shell: bash
+env:
+  FOUNDRY_VERSION: v1.7.1
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+        with:
+          FOUNDRY_VERSION: ${{ env.FOUNDRY_VERSION }}
+      - run: forge build --deny notes
+      - name: Run Slither (advisory -- never fails the job)
+        id: slither
+        continue-on-error: true
+        # REQUIRED before use: pin to a reviewed commit SHA (verify at
+        # github.com/crytic/slither-action/releases -- not resolvable without network access
+        # in the session that authored this file).
+        uses: crytic/slither-action@v0.4.1
+        with:
+          target: ${{ inputs.target }}
+          slither-version: ${{ inputs.slither_version }}
+          fail-on: none
+          sarif: results.sarif
+      - name: Upload SARIF as code-scanning annotations
+        if: always() && steps.slither.outputs.sarif != ''
+        continue-on-error: true
+        # REQUIRED before use: pin to a reviewed commit SHA (verify at
+        # github.com/github/codeql-action/releases -- not resolvable without network access
+        # in the session that authored this file).
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.slither.outputs.sarif }}
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Slither static analysis (advisory)"
+            echo
+            echo "Findings are uploaded as code-scanning annotations, not build failures --"
+            echo "this job never blocks a PR or a merge."
+          } >> "$GITHUB_STEP_SUMMARY"

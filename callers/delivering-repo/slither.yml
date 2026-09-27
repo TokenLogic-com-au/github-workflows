@@ -1,0 +1,14 @@
+name: slither
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  analyze:
+    permissions:
+      contents: read
+      security-events: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/slither.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
+    with:
+      slither_version: "0.10.4"
+      target: "."
