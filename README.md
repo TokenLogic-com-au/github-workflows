@@ -47,6 +47,16 @@ app and/or bot repos by name, and need `vars.TRACKER_REPO`/`vars.BOARD_APP_REPO`
 mints its app token with no `repositories:` filter, since a candidate PR can live
 in any repo the App is installed on, not just the tracker/board-app/bot repos.
 
+Their `callers/tracker-*.yml` templates run on both a schedule and
+`workflow_dispatch`; a dispatched run honours its own `dry_run` input either
+way, but a *scheduled* run has no input to read, so each caller gates its
+schedule's live/dry switch on an org variable instead -- `vars.AI_NOTE_LIVE`
+for `tracker-ai-progress-note.yml`, `vars.DISCORD_LIVE` for
+`tracker-no-reviewer-reminder.yml` (the same variable board-discord-bot's own
+`callers/general-task/scheduled.yml` uses for its Discord writes). Absent or
+anything other than the literal `"true"` stays dry; there is no default that
+goes live.
+
 ## Dependabot
 
 `callers/delivering-repo/dependabot.yml` is a template for a delivering repo's

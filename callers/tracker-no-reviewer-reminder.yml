@@ -17,8 +17,11 @@ jobs:
       pull-requests: write
     uses: "TokenLogic-com-au/github-workflows/.github/workflows/no-reviewer-reminder.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     with:
-      # Dry by default: only a workflow_dispatch run with dry_run explicitly false goes live.
-      dry_run: ${{ github.event_name != 'workflow_dispatch' || fromJson(inputs.dry_run) }}
+      # Dry by default. A workflow_dispatch run honours its own dry_run input (manual override
+      # either way); a scheduled run goes live only when vars.DISCORD_LIVE == 'true' -- absent
+      # or anything else stays dry (same var General-Task's scheduled.yml uses for its own
+      # Discord writes).
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJson(inputs.dry_run) || (github.event_name != 'workflow_dispatch' && vars.DISCORD_LIVE != 'true') }}
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
       discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
     secrets:
