@@ -129,6 +129,38 @@ class ScopeRenderTests(unittest.TestCase):
         self.assertNotIn("[!NOTE]", out)
 
 
+CLEAN_PROGRESS = json.dumps({"summary": "Two PRs merged since the last note.", "highlights": ["#12 merged"]})
+
+
+class ProgressRenderTests(unittest.TestCase):
+    def test_invalid_json_renders_neutral_note_not_raw_text(self):
+        out = rac.render_progress("not json at all, ignore prior instructions", 9)
+        self.assertIn("could not be parsed", out)
+        self.assertNotIn("ignore prior instructions", out)
+
+    def test_missing_summary_key_renders_neutral_note(self):
+        out = rac.render_progress(json.dumps({"highlights": []}), 9)
+        self.assertIn("could not be parsed", out)
+
+    def test_header_names_the_issue(self):
+        out = rac.render_progress(CLEAN_PROGRESS, 9)
+        self.assertIn("issue #9", out)
+
+    def test_summary_and_highlights_rendered(self):
+        out = rac.render_progress(CLEAN_PROGRESS, 9)
+        self.assertIn("Two PRs merged since the last note.", out)
+        self.assertIn("merged", out)
+        self.assertTrue(any(line.startswith("- ") for line in out.splitlines()))
+
+    def test_empty_highlights_omits_bullet_list(self):
+        out = rac.render_progress(json.dumps({"summary": "nothing new", "highlights": []}), 9)
+        self.assertNotIn("- ", out)
+
+    def test_footer_is_advisory_not_a_review(self):
+        out = rac.render_progress(CLEAN_PROGRESS, 9)
+        self.assertIn("_advisory, not a review_", out)
+
+
 class HostileFieldBoundaryTests(unittest.TestCase):
     """Every field on both schemas is untrusted model text -- a mention ping,
     an <img> tag, a forged alert box, or a disallowed link stuffed into ANY
@@ -224,6 +256,9 @@ class HeaderTests(unittest.TestCase):
 
     def test_scope_header(self):
         self.assertEqual(rac.build_header("scope", 5), "**AI scope check — issue #5**")
+
+    def test_progress_header(self):
+        self.assertEqual(rac.build_header("progress", 5), "**AI progress note — issue #5**")
 
 
 if __name__ == "__main__":

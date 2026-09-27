@@ -1,0 +1,129 @@
+name: ai-progress-note
+# Weekly, per In-Progress board issue: summarizes PR/commit activity (and non-bot comments)
+# since the issue's last progress note into one advisory comment. Reuses ai.py (kind:
+# progress) and render_ai_comment.py's rendering/footer. Skips an issue with no activity
+# since its last note (or, for an issue never noted, since it was created).
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+      board_app_ref:
+        required: true
+        type: string
+      backend:
+        type: string
+        default: openrouter
+      config:
+        type: string
+        default: board-tool/config.json
+    secrets:
+      BOARD_APP_PRIVATE_KEY:
+        required: true
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+permissions: {}
+defaults:
+  run:
+    shell: bash
+env:
+  DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+  MARKER: "<!-- github-workflows-ai-progress -->"
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Validate required org variables
+        run: |
+          missing=()
+          [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
+          [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Error: ai-progress-note requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+            exit 1
+          fi
+      - name: Mint app token
+        id: mint
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }}
+          permission-issues: write
+          permission-organization-projects: read
+      - name: Check out the board app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
+          ref: ${{ inputs.board_app_ref }}
+          path: board-tool
+          token: ${{ steps.mint.outputs.token }}
+          persist-credentials: false
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: List in-progress issues from the board
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          BOARD_CONFIG: ${{ inputs.config }}
+        run: |
+          python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "In Progress" > open-issues.json
+          jq -c '.[]' open-issues.json > issues.ndjson
+      - name: Summarize activity and post one advisory note per issue
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          BOARD_CONFIG: ${{ inputs.config }}
+          BACKEND: ${{ inputs.backend }}
+          ANTHROPIC_API_KEY: ${{ inputs.backend == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          AI_API_STYLE: ${{ inputs.backend == 'openrouter' && 'openai' || 'anthropic' }}
+          AI_API_URL: ${{ inputs.backend == 'openrouter' && 'https://openrouter.ai/api/v1/chat/completions' || '' }}
+          AI_API_KEY: ${{ inputs.backend == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
+          AI_MODEL: ${{ inputs.backend == 'openrouter' && vars.OPENROUTER_MODEL || '' }}
+          AI_REASONING_EFFORT: ${{ inputs.backend == 'openrouter' && 'low' || '' }}
+          AI_RESPONSE_FORMAT: ${{ inputs.backend == 'openrouter' && 'json_object' || '' }}
+        run: |
+          case "$BACKEND" in anthropic|openrouter) ;; *) echo "bad backend: $BACKEND"; exit 1;; esac
+          while IFS= read -r issue; do
+            number=$(printf '%s' "$issue" | jq -r .number)
+            body=$(printf '%s' "$issue" | jq -r .body)
+            issue_repo=$(printf '%s' "$issue" | jq -r \
+              '.url | capture("github\\.com/(?<o>[^/]+)/(?<r>[^/]+)/issues") | "\(.o)/\(.r)"')
+            since=$(gh api --paginate "repos/$issue_repo/issues/$number/comments" | jq -rs --arg m "$MARKER" \
+              '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))]|sort_by(.updated_at)|last|.updated_at // empty')
+            activity_args=(issue-activity --config "$BOARD_CONFIG" --repo "$issue_repo" "$number")
+            [ -n "$since" ] && activity_args+=(--since "$since")
+            python3 board-tool/board.py "${activity_args[@]}" > "activity-$number.json"
+            pr_count=$(jq '.linked_prs | length' "activity-$number.json")
+            comment_count=$(jq '.comments | length' "activity-$number.json")
+            if [ "$pr_count" = "0" ] && [ "$comment_count" = "0" ]; then
+              echo "issue #$number has no activity since its last note; skipping" >&2
+              continue
+            fi
+            {
+              echo "<issue-body>"
+              printf '%s\n' "$body"
+              echo "</issue-body>"
+              echo "<pr-activity>"
+              jq -r '.linked_prs[] | "#\(.number) \(.title) [\(.state)] \(.commit_count) commit(s)"' "activity-$number.json"
+              echo "</pr-activity>"
+              echo "<comment-activity>"
+              jq -r '.comments[] | "\(.author): \(.body)"' "activity-$number.json"
+              echo "</comment-activity>"
+            } > "input-$number.txt"
+            python3 "$GW/ai.py" progress "input-$number.txt" "out-$number.md"
+            python3 "$GW/render_ai_comment.py" progress "out-$number.md" "$number" "body-$number.md"
+            if [ "$DRY_RUN" != "0" ]; then
+              echo "would post progress note on #$number" >&2
+              continue
+            fi
+            { printf '%s\n' "$MARKER"; cat "body-$number.md"; } > "comment-$number.md"
+            gh api "repos/$issue_repo/issues/$number/comments" -X POST -F body=@"comment-$number.md" >&2
+          done < issues.ndjson

@@ -47,6 +47,8 @@ def _footer() -> str:
 def build_header(kind: str, number) -> str:
     if kind == "review":
         return f"**AI review — PR #{number}**"
+    if kind == "progress":
+        return f"**AI progress note — issue #{number}**"
     return f"**AI scope check — issue #{number}**"
 
 
@@ -165,6 +167,22 @@ def render_scope(ai_out_text: str, number) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def render_progress(ai_out_text: str, number) -> str:
+    header = build_header("progress", number)
+    data = parse_json(ai_out_text)
+    if not isinstance(data, dict) or "summary" not in data:
+        return _neutral(header)
+
+    lines = [header, "", _clean(data.get("summary"), NOTE_CAP), ""]
+    highlights = [_clean(h, FIELD_CAP) for h in (data.get("highlights") or []) if isinstance(h, str) and h.strip()]
+    if highlights:
+        lines.extend(f"- {h}" for h in highlights)
+        lines.append("")
+
+    lines.append(_footer())
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def build_results(ai_out_text: str, number, title: str, url: str, assignees, author: str = "") -> list:
     data = parse_json(ai_out_text)
     questions = []
@@ -191,11 +209,11 @@ def build_results(ai_out_text: str, number, title: str, url: str, assignees, aut
 
 def main():
     mode = sys.argv[1]
-    if mode in ("review", "scope"):
+    if mode in ("review", "scope", "progress"):
         ai_out_path, number, out_path = sys.argv[2], sys.argv[3], sys.argv[4]
         with open(ai_out_path, encoding="utf-8") as f:
             ai_out_text = f.read()
-        render = render_review if mode == "review" else render_scope
+        render = {"review": render_review, "scope": render_scope, "progress": render_progress}[mode]
         body = render(ai_out_text, number)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(body)
