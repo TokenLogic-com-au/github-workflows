@@ -19,6 +19,14 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: false
+      # Per-chain explicit RPC override consumed by action-rpc-env (it checks
+      # RPC_<SYMBOL> before falling back to Alchemy). Optional: empty means
+      # fall back to Alchemy. Only Monad needed so far, since Alchemy's Monad
+      # endpoint lacks archive coverage; add another RPC_<CHAIN> secret here
+      # (and to the matching action-rpc-env step's env) the same way if a
+      # future chain needs the same override.
+      RPC_MONAD:
+        required: false
 permissions: {}
 defaults:
   run:
@@ -254,6 +262,8 @@ jobs:
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+        env:
+          RPC_MONAD: ${{ secrets.RPC_MONAD }}
       # No separate `forge build --deny notes` here: upstream aave-proposals-v3
       # code compiles with warnings we don't own, and `forge coverage` compiles
       # anyway (a second full compile only doubled the job time).
@@ -296,6 +306,8 @@ jobs:
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+        env:
+          RPC_MONAD: ${{ secrets.RPC_MONAD }}
       - name: Recency gate
         id: gate
         continue-on-error: true

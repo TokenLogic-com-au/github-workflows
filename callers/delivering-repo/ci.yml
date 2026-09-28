@@ -11,3 +11,4 @@ jobs:
     uses: "TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      RPC_MONAD: ${{ secrets.RPC_MONAD }} # optional; overrides Alchemy for Monad (no Alchemy archive coverage)

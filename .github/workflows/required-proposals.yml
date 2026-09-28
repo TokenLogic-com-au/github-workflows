@@ -18,3 +18,4 @@ jobs:
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      RPC_MONAD: ${{ secrets.RPC_MONAD }}

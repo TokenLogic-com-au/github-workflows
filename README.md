@@ -12,11 +12,11 @@ setting on this repo must allow org repositories.
 
 | Workflow | Purpose | Key inputs | Secrets |
 |---|---|---|---|
-| `foundry-ci.yml` | `forge fmt`/`build`/`test`/`sizes`/gas report + optional coverage gate | `min_coverage` (0-100, default 0=off) | `ALCHEMY_API_KEY` |
+| `foundry-ci.yml` | `forge fmt`/`build`/`test`/`sizes`/gas report + optional coverage gate | `min_coverage` (0-100, default 0=off) | `ALCHEMY_API_KEY`, `RPC_MONAD` (optional, overrides Alchemy for Monad) |
 | `pr-board.yml` | Syncs a PR/issue to the project board (`command: pr-issue-check` or `pr-sync`) | `command`, `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY` |
 | `ai-comment.yml` | Posts an advisory AI comment: a PR review (`kind: review`, only on an `ai-review` label add) or an issue scope check (`kind: scope`, on issue open) | `kind`, `backend` (`anthropic`/`openrouter`), `dry_run`, `board_app_ref`, `discord_bot_ref`, `config`, `bot_config` | `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`, `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
 | `report-comment.yml` | Posts a CI result comment on the triggering PR, `workflow_run`-based | `workflow-name`, `dry_run` | none |
-| `proposal-checks.yml` | Governance-proposal gate: address-book + spelling + coverage (blocking), forum-vs-diff spec check + decimals sanity (advisory). One proposal folder per PR: a PR touching zero `src/<dir>/` folders skips every check (green); a PR touching more than one fails fast. | `min_coverage`, `backend`, `dry_run` | `ALCHEMY_API_KEY`, `OPENROUTER_API_KEY` |
+| `proposal-checks.yml` | Governance-proposal gate: address-book + spelling + coverage (blocking), forum-vs-diff spec check + decimals sanity (advisory). One proposal folder per PR: a PR touching zero `src/<dir>/` folders skips every check (green); a PR touching more than one fails fast. | `min_coverage`, `backend`, `dry_run` | `ALCHEMY_API_KEY`, `OPENROUTER_API_KEY`, `RPC_MONAD` (optional, overrides Alchemy for Monad) |
 | `review-ping.yml` | Notifies a configured bot repo when a review is requested | `discord_bot_ref`, `bot_config`, `dry_run` | `DISCORD_BOT_TOKEN` |
 | `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, runs the bot's batch quality check, then appends a missing-required-fields digest (config `required_issue_fields` + `required_project_fields`) to the job summary | `statuses`, `max_issues`, `board_app_ref`, `discord_bot_ref`, `backend`, `config`, `bot_config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
 | `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs | — | forwarded from the ruleset repo |
@@ -107,6 +107,7 @@ jobs:
       min_coverage: 80
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      RPC_MONAD: ${{ secrets.RPC_MONAD }} # optional; overrides Alchemy for Monad (no Alchemy archive coverage)
 ```
 
 More examples, including `ai.yml`, `board.yml`, `report.yml`, and `slither.yml`,
