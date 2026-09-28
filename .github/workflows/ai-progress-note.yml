@@ -96,7 +96,8 @@ jobs:
         uses: ./board-tool
         with:
           command: open-issues
-          args: --status "In Progress" > open-issues.json
+          statuses: "In Progress"
+          output: open-issues.json
           config: ${{ inputs.config }}
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

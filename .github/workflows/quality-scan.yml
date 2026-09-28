@@ -81,7 +81,8 @@ jobs:
         uses: ./board-tool
         with:
           command: open-issues
-          args: --status "${{ inputs.statuses }}" > open-issues.json
+          statuses: ${{ inputs.statuses }}
+          output: open-issues.json
           config: ${{ inputs.config }}
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
@@ -159,7 +160,8 @@ jobs:
         uses: ./board-tool
         with:
           command: missing-fields
-          args: --status "${{ inputs.statuses }}" > missing-fields.json
+          statuses: ${{ inputs.statuses }}
+          output: missing-fields.json
           config: ${{ inputs.config }}
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

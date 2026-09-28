@@ -119,7 +119,8 @@ jobs:
         uses: ./board-tool
         with:
           command: issue-card
-          args: "${{ steps.gate.outputs.number }} > card.json"
+          args: "${{ steps.gate.outputs.number }}"
+          output: card.json
           config: ${{ inputs.config }}
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
