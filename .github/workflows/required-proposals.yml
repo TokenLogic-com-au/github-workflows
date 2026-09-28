@@ -1,6 +1,6 @@
 name: required-proposals
-# Entry point for a future org ruleset on aave-proposals-v3-style repos:
-# add this as a required status check once a repo-ruleset workflow exists.
+# Required by the proposal-checks org ruleset. PR comments post only when the
+# target repo sets PROPOSAL_CHECKS_LIVE=true.
 on:
   pull_request:
   merge_group:
@@ -14,7 +14,7 @@ jobs:
     with:
       min_coverage: 100
       backend: openrouter
-      dry_run: true
+      dry_run: ${{ vars.PROPOSAL_CHECKS_LIVE != 'true' }}
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

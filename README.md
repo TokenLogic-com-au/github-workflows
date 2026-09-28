@@ -19,7 +19,7 @@ setting on this repo must allow org repositories.
 | `proposal-checks.yml` | Governance-proposal gate: address-book + spelling + coverage (blocking), forum-vs-diff spec check + decimals sanity (advisory). One proposal folder per PR: a PR touching zero `src/<dir>/` folders skips every check (green); a PR touching more than one fails fast. | `min_coverage`, `backend`, `dry_run` | `ALCHEMY_API_KEY`, `OPENROUTER_API_KEY`, `RPC_MONAD` (optional, overrides Alchemy for Monad) |
 | `review-ping.yml` | Notifies a configured bot repo when a review is requested | `discord_bot_ref`, `bot_config`, `dry_run` | `DISCORD_BOT_TOKEN` |
 | `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, runs the bot's batch quality check, then appends a missing-required-fields digest (config `required_issue_fields` + `required_project_fields`) to the job summary | `statuses`, `max_issues`, `board_app_ref`, `discord_bot_ref`, `backend`, `config`, `bot_config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
-| `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs | — | forwarded from the ruleset repo |
+| `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs. `required-proposals.yml` posts its PR comments only when the target repo sets the variable `PROPOSAL_CHECKS_LIVE=true` | — | forwarded from the ruleset repo |
 | `slither.yml` | Advisory-only Slither static analysis for a Foundry repo (SARIF -> code-scanning annotations); never fails the job, no coverage-style gate | `slither_version`, `target` | none |
 | `ai-progress-note.yml` | Weekly, per In-Progress board issue: summarizes PR/commit activity and non-bot comments since its last note into one advisory issue comment (reuses `ai.py` and `render_ai_comment.py`'s footer); skips an issue with no activity since its last note | `backend`, `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` |
 | `no-reviewer-reminder.yml` | Scheduled: finds open, non-draft PRs org-wide with no requested reviewer and no review, ready for review past config's `no_reviewer_hours`, and pings the author on Discord (bot roster); dedupes per PR with a marker comment posted only once the ping actually went out | `board_app_ref`, `discord_bot_ref`, `config`, `bot_config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
@@ -38,8 +38,19 @@ keeps its 24h recency gate and its own AI comment via `render_ai_comment.py`
 (built from the model's strict-JSON output, never raw model text), plus a
 single-issue bot quality check right after posting.
 
-`dry_run` defaults to `true` everywhere; flip to `false` only for an approved
-live window.
+`dry_run` defaults to `true` in every reusable workflow. Callers never set it
+to a literal: each job reads its own variable, and only the value `"true"`
+turns it live:
+
+| Variable | Job |
+| --- | --- |
+| `AI_SCOPE_LIVE` | `callers/tracker-ai.yml` |
+| `AI_NOTE_LIVE` | `callers/tracker-ai-progress-note.yml` |
+| `REVIEW_REMINDER_LIVE` | `callers/tracker-no-reviewer-reminder.yml` |
+| `BOARD_SYNC_LIVE` | `callers/delivering-repo/board.yml` |
+| `AI_COMMENT_LIVE` | `callers/delivering-repo/ai.yml` |
+| `REPORT_COMMENT_LIVE` | `callers/delivering-repo/report.yml` |
+| `PROPOSAL_CHECKS_LIVE` | `required-proposals.yml` |
 
 `config` (board app config path) and `bot_config` (bot config path) are
 required inputs with no default on every reusable workflow that takes them --
