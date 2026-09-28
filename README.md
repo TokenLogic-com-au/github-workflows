@@ -1,8 +1,8 @@
 # github-workflows
 
 Reusable CI/PR/AI workflows for TokenLogic repositories, called by short
-caller files copied into each repo (see `callers/delivering-repo/`). This
-repo is private: `ai-comment.yml` and `proposal-checks.yml` fetch their
+caller files copied into each repo (see `callers/delivering-repo/`).
+This repo is public: `ai-comment.yml` and `proposal-checks.yml` fetch their
 scripts through `.github/actions/scripts@main`, so they always follow
 `main` — GitHub fetches that composite action itself, the same mechanism
 `coverage-gate` uses, so no token is needed. The org's Actions access
