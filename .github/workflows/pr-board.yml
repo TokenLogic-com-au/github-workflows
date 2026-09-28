@@ -58,7 +58,7 @@ jobs:
         uses: ./board-tool
         with:
           command: ${{ inputs.command }}
-          args: --event "${{ github.event_path }}"
+          args: --event ${{ github.event_path }}
           config: ${{ inputs.config }}
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
