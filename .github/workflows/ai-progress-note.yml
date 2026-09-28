@@ -93,12 +93,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: List in-progress issues from the board
-        env:
-          GH_TOKEN: ${{ steps.mint-read.outputs.token }}
-          BOARD_CONFIG: ${{ inputs.config }}
-        run: |
-          python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "In Progress" > open-issues.json
-          jq -c '.[]' open-issues.json > issues.ndjson
+        uses: ./board-tool
+        with:
+          command: open-issues
+          args: --status "In Progress" > open-issues.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      - name: Split issues into ndjson
+        run: jq -c '.[]' open-issues.json > issues.ndjson
       - name: Summarize activity and post one advisory note per issue
         env:
           GH_TOKEN: ${{ steps.mint-read.outputs.token }}
