@@ -14,3 +14,4 @@ jobs:
     uses: TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@main
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      RPC_MONAD: ${{ secrets.RPC_MONAD }}
