@@ -8,6 +8,9 @@ on:
       dry_run:
         type: boolean
         default: true
+      bot_config:
+        required: true
+        type: string
     secrets:
       DISCORD_BOT_TOKEN:
         required: true
@@ -57,4 +60,5 @@ jobs:
           PR_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          BOT_CONFIG: ${{ inputs.bot_config }}
         run: python3 bot-tool/review_ping.py

@@ -20,6 +20,7 @@ jobs:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJson(inputs.dry_run) || (github.event_name != 'workflow_dispatch' && vars.AI_NOTE_LIVE != 'true') }}
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
       backend: openrouter
+      config: board-tool/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

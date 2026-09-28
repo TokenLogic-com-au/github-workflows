@@ -12,8 +12,8 @@ on:
         type: boolean
         default: true
       config:
+        required: true
         type: string
-        default: board-tool/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY:
         required: true

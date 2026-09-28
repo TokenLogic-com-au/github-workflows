@@ -25,8 +25,11 @@ on:
         type: string
         default: openrouter
       config:
+        required: true
         type: string
-        default: board-tool/config.json
+      bot_config:
+        required: true
+        type: string
     secrets:
       BOARD_APP_PRIVATE_KEY:
         required: true
@@ -159,6 +162,7 @@ jobs:
       - name: Run batch issue quality check
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          BOT_CONFIG: ${{ inputs.bot_config }}
         run: python3 bot-tool/issue_quality.py batch results.json
       - name: Missing-fields digest (advisory job summary)
         env:

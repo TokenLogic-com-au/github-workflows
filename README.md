@@ -13,16 +13,16 @@ setting on this repo must allow org repositories.
 | Workflow | Purpose | Key inputs | Secrets |
 |---|---|---|---|
 | `foundry-ci.yml` | `forge fmt`/`build`/`test`/`sizes`/gas report + optional coverage gate | `min_coverage` (0-100, default 0=off) | `ALCHEMY_API_KEY`, `QUICKNODE_TOKEN`, `QUICKNODE_ENDPOINT_NAME` |
-| `pr-board.yml` | Syncs a PR/issue to the project board (`command: pr-issue-check` or `pr-sync`) | `command`, `board_app_ref`, `dry_run` | `BOARD_APP_PRIVATE_KEY` |
-| `ai-comment.yml` | Posts an advisory AI comment: a PR review (`kind: review`, only on an `ai-review` label add) or an issue scope check (`kind: scope`, on issue open) | `kind`, `backend` (`anthropic`/`openrouter`), `dry_run`, `board_app_ref`, `discord_bot_ref`, `config` | `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`, `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
+| `pr-board.yml` | Syncs a PR/issue to the project board (`command: pr-issue-check` or `pr-sync`) | `command`, `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY` |
+| `ai-comment.yml` | Posts an advisory AI comment: a PR review (`kind: review`, only on an `ai-review` label add) or an issue scope check (`kind: scope`, on issue open) | `kind`, `backend` (`anthropic`/`openrouter`), `dry_run`, `board_app_ref`, `discord_bot_ref`, `config`, `bot_config` | `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`, `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
 | `report-comment.yml` | Posts a CI result comment on the triggering PR, `workflow_run`-based | `workflow-name`, `dry_run` | none |
 | `proposal-checks.yml` | Governance-proposal gate: address-book + spelling + coverage (blocking), forum-vs-diff spec check + decimals sanity (advisory). One proposal folder per PR: a PR touching zero `src/<dir>/` folders skips every check (green); a PR touching more than one fails fast. | `min_coverage`, `backend`, `dry_run` | `ALCHEMY_API_KEY`, `QUICKNODE_TOKEN`, `QUICKNODE_ENDPOINT_NAME`, `OPENROUTER_API_KEY` |
-| `review-ping.yml` | Notifies a configured bot repo when a review is requested | `discord_bot_ref`, `dry_run` | `DISCORD_BOT_TOKEN` |
-| `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, runs the bot's batch quality check, then appends a missing-required-fields digest (config `required_issue_fields` + `required_project_fields`) to the job summary | `statuses`, `max_issues`, `board_app_ref`, `discord_bot_ref`, `backend`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
+| `review-ping.yml` | Notifies a configured bot repo when a review is requested | `discord_bot_ref`, `bot_config`, `dry_run` | `DISCORD_BOT_TOKEN` |
+| `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, runs the bot's batch quality check, then appends a missing-required-fields digest (config `required_issue_fields` + `required_project_fields`) to the job summary | `statuses`, `max_issues`, `board_app_ref`, `discord_bot_ref`, `backend`, `config`, `bot_config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
 | `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs | — | forwarded from the ruleset repo |
 | `slither.yml` | Advisory-only Slither static analysis for a Foundry repo (SARIF -> code-scanning annotations); never fails the job, no coverage-style gate | `slither_version`, `target` | none |
 | `ai-progress-note.yml` | Weekly, per In-Progress board issue: summarizes PR/commit activity and non-bot comments since its last note into one advisory issue comment (reuses `ai.py` and `render_ai_comment.py`'s footer); skips an issue with no activity since its last note | `backend`, `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` |
-| `no-reviewer-reminder.yml` | Scheduled: finds open, non-draft PRs org-wide with no requested reviewer and no review, ready for review past config's `no_reviewer_hours`, and pings the author on Discord (bot roster); dedupes per PR with a marker comment posted only once the ping actually went out | `board_app_ref`, `discord_bot_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
+| `no-reviewer-reminder.yml` | Scheduled: finds open, non-draft PRs org-wide with no requested reviewer and no review, ready for review past config's `no_reviewer_hours`, and pings the author on Discord (bot roster); dedupes per PR with a marker comment posted only once the ping actually went out | `board_app_ref`, `discord_bot_ref`, `config`, `bot_config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
 
 `pr-board.yml`, `ai-comment.yml` (kind: scope), `quality-scan.yml`, and
 `review-ping.yml` check out the board app and/or bot repos by name; those
@@ -40,6 +40,15 @@ single-issue bot quality check right after posting.
 
 `dry_run` defaults to `true` everywhere; flip to `false` only for an approved
 live window.
+
+`config` (board app config path) and `bot_config` (bot config path) are
+required inputs with no default on every reusable workflow that takes them --
+each caller states which team's board/bot config it runs against. `bot_config`
+is a path relative to the bot checkout (`bot-tool/`, e.g.
+`bot-tool/config.json`); `config` is a path relative to the board-app checkout
+(`board-tool/`, e.g. `board-tool/config.json`). `review-ping.yml` has no
+`callers/` template in this repo (it's wired up directly per delivering repo),
+so its caller must set `bot_config` itself.
 
 `ai-progress-note.yml` and `no-reviewer-reminder.yml` also check out the board
 app and/or bot repos by name, and need `vars.TRACKER_REPO`/`vars.BOARD_APP_REPO`/

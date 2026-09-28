@@ -17,6 +17,8 @@ jobs:
       dry_run: true
       board_app_ref: "<board app commit SHA>" # REQUIRED for scope: pin to the reviewed board app commit
       discord_bot_ref: "<bot commit SHA>" # REQUIRED for scope: pin to the reviewed bot commit
+      config: board-tool/config.json
+      bot_config: bot-tool/config.json
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

@@ -16,12 +16,15 @@ on:
         type: string
         default: ""
       config:
+        required: true
         type: string
-        default: board-tool/config.json
       discord_bot_ref:
         description: "Bot commit SHA, required for kind: scope."
         type: string
         default: ""
+      bot_config:
+        required: true
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -311,6 +314,7 @@ jobs:
           NUMBER: ${{ needs.collect.outputs.number }}
           AUTHOR: ${{ github.event.issue.user.login }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          BOT_CONFIG: ${{ inputs.bot_config }}
         run: |
           title=$(gh api "repos/$REPO/issues/$NUMBER" --jq .title)
           url=$(gh api "repos/$REPO/issues/$NUMBER" --jq .html_url)

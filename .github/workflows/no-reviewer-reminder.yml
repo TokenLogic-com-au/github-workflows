@@ -17,8 +17,11 @@ on:
         required: true
         type: string
       config:
+        required: true
         type: string
-        default: board-tool/config.json
+      bot_config:
+        required: true
+        type: string
     secrets:
       BOARD_APP_PRIVATE_KEY:
         required: true
@@ -104,6 +107,7 @@ jobs:
       - name: Ping PR authors on Discord
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          BOT_CONFIG: ${{ inputs.bot_config }}
         run: python3 bot-tool/no_reviewer_ping.py pending.json sent.json
       - name: Mark reminded PRs so future runs don't repeat them
         if: env.DRY_RUN == '0'
