@@ -131,7 +131,7 @@ jobs:
             fi
             since=$(gh api --paginate "repos/$issue_repo/issues/$number/comments" | jq -rs --arg m "$MARKER" --arg bot "$BOT_LOGIN" \
               '[.[][]|select(.user.login==$bot and (.body|contains($m)))]|sort_by(.updated_at)|last|.updated_at // empty')
-            activity_args=(issue-activity --config "$BOARD_CONFIG" --repo "$issue_repo" "$number")
+            activity_args=(issue-activity --config "board-tool/$BOARD_CONFIG" --repo "$issue_repo" "$number")
             [ -n "$since" ] && activity_args+=(--since "$since")
             python3 board-tool/board.py "${activity_args[@]}" > "activity-$number.json"
             pr_count=$(jq '.linked_prs | length' "activity-$number.json")
