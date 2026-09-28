@@ -274,7 +274,7 @@ jobs:
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "${{ needs.scope.outputs.dir }}/"
-          exclude_suffixes: ".t.sol scripts/"
+          exclude_suffixes: ".t.sol .s.sol scripts/"
           no_match_test: "test_defaultProposalExecution"
           match_path: "${{ needs.scope.outputs.dir }}/*.t.sol"
 
