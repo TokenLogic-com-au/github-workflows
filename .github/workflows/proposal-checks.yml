@@ -17,10 +17,6 @@ on:
     secrets:
       ALCHEMY_API_KEY:
         required: true
-      QUICKNODE_TOKEN:
-        required: false
-      QUICKNODE_ENDPOINT_NAME:
-        required: false
       OPENROUTER_API_KEY:
         required: false
 permissions: {}
@@ -258,8 +254,6 @@ jobs:
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
-          QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
       # No separate `forge build --deny notes` here: upstream aave-proposals-v3
       # code compiles with warnings we don't own, and `forge coverage` compiles
       # anyway (a second full compile only doubled the job time).
@@ -302,8 +296,6 @@ jobs:
       - uses: aave-dao/action-rpc-env@0a4d2fc1bdaa075e24fc482eecc6c218a7aecd6b
         with:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
-          QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
       - name: Recency gate
         id: gate
         continue-on-error: true

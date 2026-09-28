@@ -14,5 +14,3 @@ jobs:
     uses: TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@main
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-      QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
-      QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
