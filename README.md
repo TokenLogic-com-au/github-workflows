@@ -38,8 +38,19 @@ keeps its 24h recency gate and its own AI comment via `render_ai_comment.py`
 (built from the model's strict-JSON output, never raw model text), plus a
 single-issue bot quality check right after posting.
 
-`dry_run` defaults to `true` everywhere; flip to `false` only for an approved
-live window.
+`dry_run` defaults to `true` in every reusable workflow. Callers never set it
+to a literal: each job reads its own variable, and only the value `"true"`
+turns it live:
+
+| Variable | Job |
+| --- | --- |
+| `AI_SCOPE_LIVE` | `callers/tracker-ai.yml` |
+| `AI_NOTE_LIVE` | `callers/tracker-ai-progress-note.yml` |
+| `REVIEW_REMINDER_LIVE` | `callers/tracker-no-reviewer-reminder.yml` |
+| `BOARD_SYNC_LIVE` | `callers/delivering-repo/board.yml` |
+| `AI_COMMENT_LIVE` | `callers/delivering-repo/ai.yml` |
+| `REPORT_COMMENT_LIVE` | `callers/delivering-repo/report.yml` |
+| `PROPOSAL_CHECKS_LIVE` | `required-proposals.yml` |
 
 `config` (board app config path) and `bot_config` (bot config path) are
 required inputs with no default on every reusable workflow that takes them --
