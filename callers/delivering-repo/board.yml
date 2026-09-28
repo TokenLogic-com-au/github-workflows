@@ -13,7 +13,7 @@ jobs:
     with:
       command: pr-issue-check
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
-      dry_run: true
+      dry_run: ${{ vars.BOARD_SYNC_LIVE != 'true' }}
       config: board-tool/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
@@ -25,7 +25,7 @@ jobs:
     with:
       command: pr-sync
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
-      dry_run: true
+      dry_run: ${{ vars.BOARD_SYNC_LIVE != 'true' }}
       config: board-tool/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

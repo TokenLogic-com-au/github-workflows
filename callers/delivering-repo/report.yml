@@ -11,4 +11,4 @@ jobs:
     uses: "TokenLogic-com-au/github-workflows/.github/workflows/report-comment.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     with:
       workflow-name: ci
-      dry_run: true
+      dry_run: ${{ vars.REPORT_COMMENT_LIVE != 'true' }}

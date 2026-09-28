@@ -14,7 +14,7 @@ jobs:
     with:
       kind: ${{ github.event_name == 'pull_request' && 'review' || 'scope' }}
       backend: openrouter
-      dry_run: true
+      dry_run: ${{ vars.AI_COMMENT_LIVE != 'true' }}
       board_app_ref: "<board app commit SHA>" # REQUIRED for scope: pin to the reviewed board app commit
       discord_bot_ref: "<bot commit SHA>" # REQUIRED for scope: pin to the reviewed bot commit
       config: board-tool/config.json
