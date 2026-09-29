@@ -12,7 +12,7 @@ jobs:
       issues: write
     uses: "TokenLogic-com-au/github-workflows/.github/workflows/proposal-checks.yml@main"
     with:
-      min_coverage: 80
+      min_coverage: 100
       backend: openrouter
       dry_run: ${{ vars.PROPOSAL_CHECKS_LIVE != 'true' }}
     secrets:
