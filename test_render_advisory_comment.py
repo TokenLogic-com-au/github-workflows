@@ -87,6 +87,29 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(out.count("[!CAUTION]"), 0)
         self.assertIn("[!WARNING]", out)
 
+    def test_unresolved_pr_description_items_render_as_advisory_warning(self):
+        out = rac.build(
+            CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags",
+            pr_description_unresolved=["- [ ] I have run a spell check on the write-up."],
+        )
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("PR description looks unfinished", out)
+        self.assertIn("I have run a spell check", out)
+
+    def test_no_unresolved_pr_description_items_adds_nothing(self):
+        out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags", pr_description_unresolved=[])
+        self.assertNotIn("PR description looks unfinished", out)
+
+
+class RenderPrDescriptionAlertTests(unittest.TestCase):
+    def test_empty_list_returns_empty_string(self):
+        self.assertEqual(rac.render_pr_description_alert([]), "")
+
+    def test_nonempty_list_renders_warning_block(self):
+        out = rac.render_pr_description_alert(["- [ ] unticked box"])
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("unticked box", out)
+
 
 if __name__ == "__main__":
     unittest.main()

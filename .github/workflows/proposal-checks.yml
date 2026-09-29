@@ -446,6 +446,12 @@ jobs:
           else
             echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
           fi
+      - name: Find the repo's PR template (if any)
+        id: pr_template
+        if: steps.folder.outputs.md != ''
+        run: |
+          tmpl=$(find .github -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -1)
+          echo "path=${tmpl:-}" >> "$GITHUB_OUTPUT"
       - name: Post one advisory comment
         id: post
         if: steps.folder.outputs.md != ''
@@ -457,6 +463,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
           DIFF_SOURCE: ${{ steps.diff.outputs.source }}
           FORK_TEST_STATUS: ${{ steps.diff.outputs.fork_test_status }}
+          # Never interpolated into the script text -- read only through the
+          # environment, same as every other untrusted PR-supplied value here.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TEMPLATE_PATH: ${{ steps.pr_template.outputs.path }}
         run: |
           if [ "$DRY_RUN" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
@@ -464,7 +474,13 @@ jobs:
           fi
           diff_report_path="${{ steps.diff.outputs.report }}"
           printf '%s' "$FORK_TEST_STATUS" > fork-status.txt
-          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt
+          printf '%s' "$PR_BODY" > pr-body.txt
+          if [ -n "$PR_TEMPLATE_PATH" ]; then
+            cat "$PR_TEMPLATE_PATH" > pr-template.txt
+          else
+            : > pr-template.txt
+          fi
+          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt
           if [ "$DIFF_SOURCE" = "committed" ]; then
             diff_note="_Diff report: committed by the author._"
           else
@@ -500,6 +516,54 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Resolve the Upstream PR line
+        id: upstream
+        if: needs.scope.outputs.count == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          FORK_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          # Never interpolated into the script text -- read only through the
+          # environment, same as every other untrusted PR-supplied value here.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Repo-level fact (is this repo a fork, and of what), independent of
+          # the proposal folder -- recomputed every run so a later un-forking
+          # or re-pointing is picked up without a stale line lingering.
+          repo_json=$(gh api "repos/$REPO" 2>/dev/null || echo '{}')
+          is_fork=$(echo "$repo_json" | jq -r '.fork // false')
+          parent_repo=$(echo "$repo_json" | jq -r '.parent.full_name // empty')
+          parent_default_branch=""
+          candidate_prs_json="[]"
+          if [ "$is_fork" = "true" ] && [ -n "$parent_repo" ]; then
+            parent_default_branch=$(gh api "repos/$parent_repo" --jq '.default_branch' 2>/dev/null || echo "")
+            if [ -z "$parent_default_branch" ]; then
+              echo "::warning::could not resolve the default branch for $parent_repo (gh api repos/$parent_repo failed or returned no default_branch); Upstream PR link will report a lookup failure"
+            fi
+            # Selection between multiple candidates (open-preferred, else most
+            # recently updated) is pick_upstream_pr's job, not jq's -- keeps it
+            # testable and out of the workflow.
+            candidate_prs_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null || echo '[]')
+          fi
+          fork_repo="${REPO#*/}"
+          line=$(jq -n \
+            --argjson is_fork "$is_fork" \
+            --arg parent_repo "$parent_repo" \
+            --arg parent_default_branch "$parent_default_branch" \
+            --arg fork_owner "$FORK_OWNER" \
+            --arg fork_repo "$fork_repo" \
+            --arg head_branch "$HEAD_BRANCH" \
+            --arg pr_title "$PR_TITLE" \
+            --arg fork_pr_body "$PR_BODY" \
+            --argjson candidate_prs "$candidate_prs_json" \
+            '{is_fork:$is_fork, parent_repo:$parent_repo, parent_default_branch:$parent_default_branch,
+              fork_owner:$fork_owner, fork_repo:$fork_repo, head_branch:$head_branch, pr_title:$pr_title,
+              fork_pr_body:$fork_pr_body,
+              candidate_prs: [$candidate_prs[] | {number, state, html_url, updated_at}]}' \
+            | python3 "$GW/upstream_pr.py")
+          echo "line=$(printf '%s' "$line" | base64 -w0)" >> "$GITHUB_OUTPUT"
       - name: Post the check summary comment
         continue-on-error: true
         env:
@@ -521,6 +585,7 @@ jobs:
           ADVISORY_HAS_ISSUES: ${{ needs.advisory.outputs.has_issues }}
           REPO_FULL: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UPSTREAM_LINE: ${{ steps.upstream.outputs.line }}
         run: |
           if [ "$SCOPE_COUNT" = "0" ]; then
             echo "No proposal folder changed in this PR; proposal checks skipped." > summary_body.md
@@ -531,18 +596,20 @@ jobs:
             ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
             sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
             cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
+            upstream_line_plain=$(printf '%s' "$UPSTREAM_LINE" | base64 -d 2>/dev/null || true)
             jq -n \
               --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
               --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
               --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
               --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
-              --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
+              --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" --arg upstream_line "$upstream_line_plain" \
               '{
                 results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
                 advisory_has_issues: ($adv_issues == "1"),
                 repo: $repo, head_sha: $head_sha,
                 details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
-                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
+                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url,
+                upstream_pr_line: $upstream_line
               }' > summary_payload.json
             python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
               echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
