@@ -70,45 +70,11 @@ runs:
         [ -n "$NO_MATCH_TEST" ] && args+=(--no-match-test "$NO_MATCH_TEST")
         [ -n "$MATCH_PATH" ] && args+=(--match-path "$MATCH_PATH")
         forge coverage "${args[@]}"
-        covered=0
-        total=0
-        in_scope=0
-        current_file=""
-        uncovered_sample=""
-        nl=$'\n'
-        uncovered_count=0
-        while IFS= read -r line; do
-          case "$line" in
-            SF:*)
-              current_file="${line#SF:}"
-              in_scope=0
-              case "$current_file" in
-                "$PATH_PREFIX"*)
-                  in_scope=1
-                  for suf in $EXCLUDE_SUFFIXES; do
-                    case "$current_file" in
-                      *"$suf") in_scope=0 ;;
-                    esac
-                  done
-                  ;;
-              esac
-              ;;
-            LH:*) [ "$in_scope" -eq 1 ] && covered=$((covered + ${line#LH:})) ;;
-            LF:*) [ "$in_scope" -eq 1 ] && total=$((total + ${line#LF:})) ;;
-            DA:*)
-              if [ "$in_scope" -eq 1 ] && [ "$uncovered_count" -lt 15 ]; then
-                da="${line#DA:}"
-                lno="${da%%,*}"
-                hits="${da#*,}"
-                hits="${hits%%,*}"
-                if [ "$hits" = "0" ]; then
-                  uncovered_sample="${uncovered_sample}${current_file}:${lno}${nl}"
-                  uncovered_count=$((uncovered_count + 1))
-                fi
-              fi
-              ;;
-          esac
-        done < lcov.info
+        rm -f uncovered_sample.txt
+        read -r covered total < <(
+          SAMPLE_FILE=uncovered_sample.txt awk -f "$GITHUB_ACTION_PATH/coverage.awk" lcov.info
+        )
+        uncovered_sample="$(cat uncovered_sample.txt)"
         # base64-encoded single-line output: the multi-line `name<<EOF ... EOF`
         # form was observed to fail delimiter matching on this runner
         # ("Invalid value. Matching delimiter not found") for non-trivial
