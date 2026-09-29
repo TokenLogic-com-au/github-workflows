@@ -19,6 +19,8 @@ def _icon(name: str, result: str, has_findings: bool, advisory_has_issues: bool)
             return "❌"
         return "⚠️" if advisory_has_issues else "✅"
     if name in WARNING:
+        if result != "success":
+            return "❌"
         return "⚠️" if has_findings else "✅"
     return "✅" if result == "success" else "❌"
 
@@ -100,20 +102,17 @@ def render(
             safe_lines = [sanitize_markdown(line, 300) for line in body_lines if line.strip()]
             block = "\n".join(f"> 🔴 {line}" for line in safe_lines) or "> 🔴 (no details captured)"
             lines.append(f"> [!CAUTION]\n> **{name} failed**\n{block}")
-        elif name == "address-book":
-            if not raw_detail:
-                continue
-            lines.append("")
-            lines.append(
-                f"> [!WARNING]\n> **{name}: warnings**\n\n" + _render_address_book_table(raw_detail, repo, head_sha)
-            )
-        elif name == "spelling":
-            if not raw_detail:
-                continue
-            lines.append("")
-            lines.append(
-                f"> [!WARNING]\n> **{name}: warnings**\n\n" + _render_spelling_table(raw_detail, repo, head_sha)
-            )
+        elif name in ("address-book", "spelling"):
+            table_fn = _render_address_book_table if name == "address-book" else _render_spelling_table
+            if result != "success":
+                # Job errored (e.g. address book missing, cspell config error) --
+                # this is a real failure, not a finding to warn about.
+                lines.append("")
+                table = table_fn(raw_detail, repo, head_sha) if raw_detail else "(no details captured)"
+                lines.append(f"> [!CAUTION]\n> **{name} failed**\n\n" + table)
+            elif raw_detail:
+                lines.append("")
+                lines.append(f"> [!WARNING]\n> **{name}: warnings**\n\n" + table_fn(raw_detail, repo, head_sha))
 
     if results.get("advisory") and advisory_url:
         lines.append("")

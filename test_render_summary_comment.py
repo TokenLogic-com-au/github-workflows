@@ -108,6 +108,34 @@ class RenderTests(unittest.TestCase):
         self.assertIn("🔴", out)
         self.assertIn("[!CAUTION]", out)
 
+    def test_address_book_job_error_shows_failure_not_warning(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "address-book": "failure"}
+        details = {"address-book": "address book not found"}
+        out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
+        self.assertIn("❌ **address-book**", out)
+        self.assertNotIn("⚠️ **address-book**", out)
+        self.assertIn("[!CAUTION]", out)
+        self.assertIn("address-book failed", out)
+
+    def test_spelling_job_error_with_no_details_shows_failure(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "spelling": "failure"}
+        out = rsc.render(results, {}, "100", "100", "", False, REPO, SHA)
+        self.assertIn("❌ **spelling**", out)
+        self.assertNotIn("⚠️ **spelling**", out)
+        self.assertIn("[!CAUTION]", out)
+        self.assertIn("spelling failed", out)
+        self.assertIn("(no details captured)", out)
+
+    def test_address_book_cancelled_shows_failure_icon(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "address-book": "cancelled"}
+        out = rsc.render(results, {}, "100", "100", "", False, REPO, SHA)
+        self.assertIn("❌ **address-book**", out)
+
+    def test_spelling_skipped_shows_failure_icon(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "spelling": "skipped"}
+        out = rsc.render(results, {}, "100", "100", "", False, REPO, SHA)
+        self.assertIn("❌ **spelling**", out)
+
     def test_coverage_failure_shows_measured_vs_required(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
         out = rsc.render(results, {"coverage": "src/x/Foo.sol:20"}, "83", "100", "", False, REPO, SHA)

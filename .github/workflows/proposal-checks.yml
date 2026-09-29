@@ -140,7 +140,7 @@ jobs:
             case "$book_text_lc" in
               *"$addr_lc"*) ;;
               *)
-                echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+                echo "::warning file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
                 details="${details}${file}|${lineno}|raw address ${addr} not in the address book${nl}"
                 fail=1
                 ;;
@@ -238,10 +238,17 @@ jobs:
             done < <(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
           fi
           echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
-          # Non-blocking: parsed findings are reported above and in the
-          # summary comment but no longer fail the job. A non-zero cspell
-          # exit with no parsed findings is a real error (bad config, etc.)
-          # and still fails.
+          # Non-blocking: parsed typo findings are reported above and in the
+          # summary comment but no longer fail the job. A cspell output line
+          # that is neither a typo finding nor the summary line (config
+          # error, unreadable file, etc.) is a real error and still fails,
+          # even alongside typo findings.
+          extra_error_lines=$(grep -v -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt \
+            | grep -v '^CSpell: ' | grep -v '^[[:space:]]*$' || true)
+          if [ "$status" -ne 0 ] && [ -n "$extra_error_lines" ]; then
+            echo "::error::cspell reported non-spelling error output; failing"
+            exit 1
+          fi
           if [ "$status" -eq 0 ] || [ -n "$detail" ]; then
             exit 0
           fi
