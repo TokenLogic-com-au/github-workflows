@@ -10,6 +10,17 @@ from urllib.parse import urlencode
 HEADING_RE = re.compile(r"^(#{1,6})\s*(.*)$", re.MULTILINE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 NO_SUMMARY_NOTE = " (no Simple Summary found; add a body by hand)"
+LOOKUP_FAILED_LINE = "Upstream PR: lookup failed (see the job log)"
+
+
+def pick_upstream_pr(prs: list) -> dict:
+    """Picks which upstream PR the summary line should point to, when more
+    than one PR on the parent already has this fork's branch as its head: an
+    OPEN one wins regardless of age, otherwise the most recently updated one.
+    Returns None for an empty/falsy list."""
+    if not prs:
+        return None
+    return sorted(prs, key=lambda p: (p.get("state") == "open", p.get("updated_at") or ""), reverse=True)[0]
 
 
 def extract_simple_summary(markdown: str) -> str:
@@ -61,6 +72,8 @@ def render_upstream_pr_line(
         return ""
     if existing_pr:
         return f"Upstream PR: [{parent_repo}#{existing_pr['number']}]({existing_pr['html_url']}) ({existing_pr['state']})"
+    if not parent_default_branch:
+        return LOOKUP_FAILED_LINE
 
     summary = (simple_summary or "").strip()
     body = f"{summary}\n\nInternal review: {fork_pr_url}" if summary else f"Internal review: {fork_pr_url}"
@@ -74,6 +87,9 @@ def main():
     import sys
 
     payload = json.load(sys.stdin)
+    existing_pr = payload.get("existing_pr")
+    if existing_pr is None and "candidate_prs" in payload:
+        existing_pr = pick_upstream_pr(payload.get("candidate_prs") or [])
     out = render_upstream_pr_line(
         payload["is_fork"],
         payload.get("parent_repo", ""),
@@ -84,7 +100,7 @@ def main():
         payload.get("pr_title", ""),
         payload.get("fork_pr_url", ""),
         payload.get("simple_summary", ""),
-        payload.get("existing_pr"),
+        existing_pr,
     )
     sys.stdout.write(out)
 

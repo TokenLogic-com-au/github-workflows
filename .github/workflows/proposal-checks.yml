@@ -525,12 +525,17 @@ jobs:
           is_fork=$(echo "$repo_json" | jq -r '.fork // false')
           parent_repo=$(echo "$repo_json" | jq -r '.parent.full_name // empty')
           parent_default_branch=""
-          existing_pr_json="null"
+          candidate_prs_json="[]"
           simple_summary=""
           if [ "$is_fork" = "true" ] && [ -n "$parent_repo" ]; then
             parent_default_branch=$(gh api "repos/$parent_repo" --jq '.default_branch' 2>/dev/null || echo "")
-            existing_pr_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null \
-              | jq -c '(. | sort_by(.updated_at) | reverse | .[0]) // null' 2>/dev/null || echo null)
+            if [ -z "$parent_default_branch" ]; then
+              echo "::warning::could not resolve the default branch for $parent_repo (gh api repos/$parent_repo failed or returned no default_branch); Upstream PR link will report a lookup failure"
+            fi
+            # Selection between multiple candidates (open-preferred, else most
+            # recently updated) is pick_upstream_pr's job, not jq's -- keeps it
+            # testable and out of the workflow.
+            candidate_prs_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null || echo '[]')
             md=$(find "$DIR" -maxdepth 1 -name '*.md' 2>/dev/null | head -1)
             if [ -n "$md" ]; then
               simple_summary=$(MD_PATH="$md" python3 -c 'import os, sys; sys.path.insert(0, os.environ["GW"]); from upstream_pr import extract_simple_summary, first_two_sentences; print(first_two_sentences(extract_simple_summary(open(os.environ["MD_PATH"], encoding="utf-8").read())))')
@@ -547,12 +552,11 @@ jobs:
             --arg pr_title "$PR_TITLE" \
             --arg fork_pr_url "$FORK_PR_URL" \
             --arg simple_summary "$simple_summary" \
-            --argjson existing_pr "$existing_pr_json" \
+            --argjson candidate_prs "$candidate_prs_json" \
             '{is_fork:$is_fork, parent_repo:$parent_repo, parent_default_branch:$parent_default_branch,
               fork_owner:$fork_owner, fork_repo:$fork_repo, head_branch:$head_branch, pr_title:$pr_title,
               fork_pr_url:$fork_pr_url, simple_summary:$simple_summary,
-              existing_pr: (if $existing_pr == null then null else
-                {number:$existing_pr.number, state:$existing_pr.state, html_url:$existing_pr.html_url} end)}' \
+              candidate_prs: [$candidate_prs[] | {number, state, html_url, updated_at}]}' \
             | python3 "$GW/upstream_pr.py")
           echo "line=$(printf '%s' "$line" | base64 -w0)" >> "$GITHUB_OUTPUT"
       - name: Post the check summary comment

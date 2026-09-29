@@ -55,6 +55,24 @@ class CompareUrlTests(unittest.TestCase):
         self.assertEqual(url, expected)
 
 
+class PickUpstreamPrTests(unittest.TestCase):
+    def test_prefers_open_over_later_updated_closed(self):
+        closed_later = {"number": 1, "state": "closed", "updated_at": "2026-02-01T00:00:00Z", "html_url": "u1"}
+        open_earlier = {"number": 2, "state": "open", "updated_at": "2026-01-01T00:00:00Z", "html_url": "u2"}
+        picked = up.pick_upstream_pr([closed_later, open_earlier])
+        self.assertEqual(picked["number"], 2)
+
+    def test_no_open_falls_back_to_most_recently_updated(self):
+        older = {"number": 1, "state": "closed", "updated_at": "2026-01-01T00:00:00Z", "html_url": "u1"}
+        newer = {"number": 2, "state": "closed", "updated_at": "2026-02-01T00:00:00Z", "html_url": "u2"}
+        picked = up.pick_upstream_pr([older, newer])
+        self.assertEqual(picked["number"], 2)
+
+    def test_empty_list_returns_none(self):
+        self.assertIsNone(up.pick_upstream_pr([]))
+        self.assertIsNone(up.pick_upstream_pr(None))
+
+
 class RenderUpstreamPrLineTests(unittest.TestCase):
     def test_non_fork_produces_no_line(self):
         line = up.render_upstream_pr_line(
@@ -78,6 +96,21 @@ class RenderUpstreamPrLineTests(unittest.TestCase):
         )
         self.assertEqual(line, f"Upstream PR: [{PARENT}#512](https://github.com/{PARENT}/pull/512) (open)")
         self.assertNotIn("compare", line)
+
+    def test_empty_parent_default_branch_returns_lookup_failed(self):
+        line = up.render_upstream_pr_line(
+            True, PARENT, "", FORK_OWNER, FORK_REPO, HEAD_BRANCH, TITLE, FORK_PR_URL, "some summary."
+        )
+        self.assertEqual(line, up.LOOKUP_FAILED_LINE)
+        self.assertNotIn("compare", line)
+
+    def test_existing_pr_bypasses_empty_default_branch_check(self):
+        existing = {"number": 512, "state": "open", "html_url": f"https://github.com/{PARENT}/pull/512"}
+        line = up.render_upstream_pr_line(
+            True, PARENT, "", FORK_OWNER, FORK_REPO, HEAD_BRANCH, TITLE, FORK_PR_URL, "some summary.",
+            existing_pr=existing,
+        )
+        self.assertEqual(line, f"Upstream PR: [{PARENT}#512](https://github.com/{PARENT}/pull/512) (open)")
 
     def test_body_is_summary_plus_blank_line_plus_internal_review(self):
         summary = "This AIP resizes allowances. GHO is unchanged."
