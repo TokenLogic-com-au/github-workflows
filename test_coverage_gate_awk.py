@@ -33,7 +33,13 @@ def naive_lh_lf(lcov_text, path_prefix, exclude_suffixes):
     return covered, total
 
 
-def run_awk(awk_bin, lcov_text, path_prefix="src/", exclude_suffixes=".t.sol .s.sol"):
+def run_awk(
+    awk_bin,
+    lcov_text,
+    path_prefix="src/",
+    exclude_suffixes=".t.sol .s.sol",
+    awk_script=AWK_SCRIPT,
+):
     with tempfile.TemporaryDirectory() as d:
         lcov_path = os.path.join(d, "lcov.info")
         sample_path = os.path.join(d, "sample.txt")
@@ -44,7 +50,7 @@ def run_awk(awk_bin, lcov_text, path_prefix="src/", exclude_suffixes=".t.sol .s.
         env["EXCLUDE_SUFFIXES"] = exclude_suffixes
         env["SAMPLE_FILE"] = sample_path
         result = subprocess.run(
-            [awk_bin, "-f", AWK_SCRIPT, lcov_path],
+            [awk_bin, "-f", awk_script, lcov_path],
             env=env,
             capture_output=True,
             text=True,
@@ -56,6 +62,19 @@ def run_awk(awk_bin, lcov_text, path_prefix="src/", exclude_suffixes=".t.sol .s.
             with open(sample_path) as f:
                 sample = [l for l in f.read().splitlines() if l]
         return covered, total, sample
+
+
+def make_unbounded_body_variant(tmpdir):
+    # Buggy stand-in: a function's body never ends at the next FN line,
+    # so a later function's hit lines wrongly count as this one's body.
+    with open(AWK_SCRIPT) as f:
+        src = f.read()
+    patched = src.replace("nfl = next_fn_line(line)", "nfl = -1")
+    assert patched != src, "next_fn_line call site not found to patch"
+    path = os.path.join(tmpdir, "buggy_coverage.awk")
+    with open(path, "w") as f:
+        f.write(patched)
+    return path
 
 
 class CoverageAwkTests(unittest.TestCase):
@@ -90,6 +109,40 @@ class CoverageAwkTests(unittest.TestCase):
             covered, total, sample = run_awk(awk_bin, lcov)
             self.assertEqual((covered, total), (5, 5))
             self.assertEqual(sample, [])
+
+        self.for_each_awk(check)
+
+    def test_body_does_not_run_past_next_fn_header(self):
+        # a's header (line 5) has no body of its own before b starts at
+        # line 6, so a's 0-hit header must stay uncovered even though b
+        # (hit) follows it in the same SF record.
+        lcov = (
+            "TN:\n"
+            "SF:src/X.sol\n"
+            "FN:5,a\n"
+            "DA:5,0\n"
+            "FN:6,b\n"
+            "DA:6,1\n"
+            "DA:7,1\n"
+            "LF:3\n"
+            "LH:2\n"
+            "end_of_record\n"
+        )
+
+        def check(awk_bin):
+            covered, total, sample = run_awk(awk_bin, lcov)
+            self.assertEqual((covered, total), (2, 3))
+            self.assertEqual(sample, ["src/X.sol:5"])
+
+            with tempfile.TemporaryDirectory() as d:
+                buggy = make_unbounded_body_variant(d)
+                bcovered, btotal, bsample = run_awk(
+                    awk_bin, lcov, awk_script=buggy
+                )
+                # the bug lets b's hit lines count as a's body, wrongly
+                # marking a's header covered too.
+                self.assertNotEqual((bcovered, btotal, bsample), (2, 3, ["src/X.sol:5"]))
+                self.assertEqual((bcovered, btotal, bsample), (3, 3, []))
 
         self.for_each_awk(check)
 

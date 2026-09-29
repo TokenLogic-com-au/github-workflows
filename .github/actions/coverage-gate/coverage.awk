@@ -1,13 +1,9 @@
-# Sums lcov line coverage under PATH_PREFIX (excluding EXCLUDE_SUFFIXES),
-# treating a public function's FN header line as covered when any of its
-# body lines were hit even if the header line itself shows 0 hits (a
-# function that is only called internally, never externally).
-#
-# Env: PATH_PREFIX, EXCLUDE_SUFFIXES (space-separated literal suffixes).
-# Optional env: SAMPLE_FILE (default uncovered_sample.txt), written fresh
-# with up to 15 "file:line" entries, sorted by file then line.
-#
-# Prints "<covered> <total>" on stdout.
+# Sums lcov line coverage under PATH_PREFIX (excluding EXCLUDE_SUFFIXES).
+# A function's 0-hit FN header line counts as covered when a later line
+# of its body ran. Env: PATH_PREFIX, EXCLUDE_SUFFIXES, SAMPLE_FILE.
+# Prints "<covered> <total>"; writes up to 15 sorted "file:line" to SAMPLE_FILE.
+# Known limit: an unused inline-assembly function inside a Solidity
+# function body counts as covered when a later line of that body ran.
 
 BEGIN {
     sample_file = ENVIRON["SAMPLE_FILE"]
