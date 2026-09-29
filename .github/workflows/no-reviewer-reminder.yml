@@ -1,9 +1,9 @@
 name: no-reviewer-reminder
 # Scheduled: finds open, non-draft PRs across the org with no requested reviewer and no
 # review, ready for review for at least the configured threshold (board-app config's
-# `no_reviewer_hours`), and pings the PR author on Discord via the bot's roster. Dedupes per
+# `no_reviewer_hours`), and pings the PR author on Discord via the roster. Dedupes per
 # PR with a marker comment on the PR itself, posted only once the ping actually goes out
-# (never in dry-run).
+# (never in dry-run) -- board.py's `no-reviewer-ping` subcommand owns the whole flow.
 on:
   workflow_call:
     inputs:
@@ -13,13 +13,7 @@ on:
       board_app_ref:
         required: true
         type: string
-      discord_bot_ref:
-        required: true
-        type: string
       config:
-        required: true
-        type: string
-      bot_config:
         required: true
         type: string
     secrets:
@@ -31,92 +25,42 @@ permissions: {}
 defaults:
   run:
     shell: bash
-env:
-  DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
-  MARKER: "<!-- github-workflows-no-reviewer -->"
 jobs:
   remind:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - name: Validate required org variables
         run: |
-          missing=()
-          [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
-          [ -z "${{ vars.BOT_REPO }}" ] && missing+=("vars.BOT_REPO")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "Error: no-reviewer-reminder requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+          if [ -z "${{ vars.BOARD_APP_REPO }}" ]; then
+            echo "Error: no-reviewer-reminder requires vars.BOARD_APP_REPO to be set"
             exit 1
           fi
-      - name: Mint app token
-        id: mint
+      - name: Mint checkout token (board app)
+        id: mint-checkout
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          # No `repositories:` filter -- PRs needing a reminder or a dedupe comment can live in
-          # any repo the App is installed on, not just board-tool/bot-tool (checked out below by
-          # name, not by access scope).
+          repositories: ${{ vars.BOARD_APP_REPO }}
           permission-contents: read
-          permission-pull-requests: write
       - name: Check out the board app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
           ref: ${{ inputs.board_app_ref }}
           path: board-tool
-          token: ${{ steps.mint.outputs.token }}
+          token: ${{ steps.mint-checkout.outputs.token }}
           persist-credentials: false
-      - name: Check out the bot
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run board.py no-reviewer-ping
+        uses: ./board-tool
         with:
-          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
-          ref: ${{ inputs.discord_bot_ref }}
-          path: bot-tool
-          token: ${{ steps.mint.outputs.token }}
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Find ready-for-review PRs with no reviewer
-        env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
-          BOARD_CONFIG: ${{ inputs.config }}
-        run: python3 board-tool/board.py no-reviewer-prs --config "$BOARD_CONFIG" > prs.json
-      - name: Drop PRs already reminded
-        env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
-          BOT_LOGIN: ${{ steps.mint.outputs.app-slug }}[bot]
-        run: |
-          items="[]"
-          while IFS= read -r pr; do
-            repo=$(printf '%s' "$pr" | jq -r .repo)
-            number=$(printf '%s' "$pr" | jq -r .number)
-            existing=$(gh api --paginate "repos/${{ github.repository_owner }}/$repo/issues/$number/comments" \
-              | jq -rs --arg m "$MARKER" --arg bot "$BOT_LOGIN" '[.[][]|select(.user.login==$bot and (.body|contains($m)))]|length')
-            if [ "$existing" != "0" ]; then
-              echo "PR $repo#$number already reminded; skipping" >&2
-              continue
-            fi
-            items=$(jq -cs '.[0] + [.[1]]' <(printf '%s' "$items") <(printf '%s' "$pr"))
-          done < <(jq -c '.[]' prs.json)
-          printf '%s' "$items" > pending.json
-      - name: Ping PR authors on Discord
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          BOT_CONFIG: ${{ inputs.bot_config }}
-        run: python3 bot-tool/no_reviewer_ping.py pending.json sent.json
-      - name: Mark reminded PRs so future runs don't repeat them
-        if: env.DRY_RUN == '0'
-        env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
-        run: |
-          while IFS= read -r pr; do
-            repo=$(printf '%s' "$pr" | jq -r .repo)
-            number=$(printf '%s' "$pr" | jq -r .number)
-            gh api "repos/${{ github.repository_owner }}/$repo/issues/$number/comments" -X POST \
-              -f body="$MARKER"$'\n'"_no-reviewer reminder posted -- advisory, not a review_"
-          done < <(jq -c '.[]' sent.json)
+          command: no-reviewer-ping
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          discord-bot-token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          board-live: ${{ !inputs.dry_run }}
+          discord-live: ${{ !inputs.dry_run }}

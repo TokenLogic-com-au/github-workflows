@@ -2,7 +2,7 @@ name: quality-scan
 # Batch scope-check of open board issues: lists issues via the board app,
 # skips any that already carry the ai-comment marker, runs the same
 # scope.md AI check + render as ai-comment.yml's scope path per issue, then
-# hands the whole batch to the bot's issue_quality.py.
+# hands the whole batch to board.py's quality-post subcommand.
 on:
   workflow_call:
     inputs:
@@ -18,16 +18,10 @@ on:
       board_app_ref:
         required: true
         type: string
-      discord_bot_ref:
-        required: true
-        type: string
       backend:
         type: string
         default: openrouter
       config:
-        required: true
-        type: string
-      bot_config:
         required: true
         type: string
     secrets:
@@ -58,50 +52,42 @@ jobs:
           missing=()
           [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
           [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
-          [ -z "${{ vars.BOT_REPO }}" ] && missing+=("vars.BOT_REPO")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "Error: quality-scan requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
             exit 1
           fi
-      - name: Mint app token
-        id: mint
+      - name: Mint checkout token (board app)
+        id: mint-checkout
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }},${{ vars.BOT_REPO }}
-          permission-issues: write
+          repositories: ${{ vars.BOARD_APP_REPO }}
           permission-contents: read
-          permission-organization-projects: read
       - name: Check out the board app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
           ref: ${{ inputs.board_app_ref }}
           path: board-tool
-          token: ${{ steps.mint.outputs.token }}
-          persist-credentials: false
-      - name: Check out the bot
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
-          ref: ${{ inputs.discord_bot_ref }}
-          path: bot-tool
-          token: ${{ steps.mint.outputs.token }}
+          token: ${{ steps.mint-checkout.outputs.token }}
           persist-credentials: false
       - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: List open issues from the board
-        env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
-          BOARD_CONFIG: ${{ inputs.config }}
-          STATUSES: ${{ inputs.statuses }}
-        run: |
-          python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "$STATUSES" > open-issues.json
-          jq -c '.[]' open-issues.json > issues.ndjson
+        uses: ./board-tool
+        with:
+          command: open-issues
+          statuses: ${{ inputs.statuses }}
+          output: open-issues.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      - name: Split issues into ndjson
+        run: jq -c '.[]' open-issues.json > issues.ndjson
       - name: Scope-check each issue and collect results
         env:
           GH_TOKEN: ${{ github.token }}
@@ -160,17 +146,27 @@ jobs:
           done < issues.ndjson
           printf '%s' "$items" > results.json
       - name: Run batch issue quality check
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          BOT_CONFIG: ${{ inputs.bot_config }}
-        run: python3 bot-tool/issue_quality.py batch results.json
+        uses: ./board-tool
+        with:
+          command: quality-post
+          args: batch results.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          discord-bot-token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          board-live: ${{ !inputs.dry_run }}
+          discord-live: ${{ !inputs.dry_run }}
       - name: Missing-fields digest (advisory job summary)
-        env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
-          BOARD_CONFIG: ${{ inputs.config }}
-          STATUSES: ${{ inputs.statuses }}
+        uses: ./board-tool
+        with:
+          command: missing-fields
+          statuses: ${{ inputs.statuses }}
+          output: missing-fields.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      - name: Render missing-fields digest
         run: |
-          python3 board-tool/board.py missing-fields --config "$BOARD_CONFIG" --status "$STATUSES" > missing-fields.json
           {
             echo "## Missing required board fields (advisory)"
             echo

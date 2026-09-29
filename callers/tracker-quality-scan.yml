@@ -22,10 +22,8 @@ jobs:
       max_issues: ${{ fromJson(inputs.max_issues) }}
       dry_run: ${{ fromJson(inputs.dry_run) }}
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
-      discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
       backend: openrouter
-      config: board-tool/config.json
-      bot_config: bot-tool/config.json
+      config: config.json
     secrets:
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

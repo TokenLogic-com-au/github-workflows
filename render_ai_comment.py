@@ -5,9 +5,9 @@ model's own text never reaches GitHub except through sanitize_markdown()
 inside a bounded field. Invalid/missing JSON renders one neutral note, never
 the raw model text.
 
-Also builds the one-item results.json handed to the bot's
-issue_quality.py (the "results" mode below) from the same parsed scope
-output, so both consumers share one JSON-parsing path.
+Also builds the one-item results.json handed to board-app's
+`quality-post single` subcommand (the "results" mode below) from the same
+parsed scope output, so both consumers share one JSON-parsing path.
 """
 import json
 import sys

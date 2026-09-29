@@ -24,9 +24,7 @@ jobs:
       # nudge/stale jobs must never also switch this one on.
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJson(inputs.dry_run) || (github.event_name != 'workflow_dispatch' && vars.REVIEW_REMINDER_LIVE != 'true') }}
       board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
-      discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
-      config: board-tool/config.json
-      bot_config: bot-tool/config.json
+      config: config.json
     secrets:
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}

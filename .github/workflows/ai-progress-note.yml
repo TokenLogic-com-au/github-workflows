@@ -93,12 +93,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: List in-progress issues from the board
-        env:
-          GH_TOKEN: ${{ steps.mint-read.outputs.token }}
-          BOARD_CONFIG: ${{ inputs.config }}
-        run: |
-          python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "In Progress" > open-issues.json
-          jq -c '.[]' open-issues.json > issues.ndjson
+        uses: ./board-tool
+        with:
+          command: open-issues
+          statuses: "In Progress"
+          output: open-issues.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+      - name: Split issues into ndjson
+        run: jq -c '.[]' open-issues.json > issues.ndjson
       - name: Summarize activity and post one advisory note per issue
         env:
           GH_TOKEN: ${{ steps.mint-read.outputs.token }}
@@ -127,7 +131,7 @@ jobs:
             fi
             since=$(gh api --paginate "repos/$issue_repo/issues/$number/comments" | jq -rs --arg m "$MARKER" --arg bot "$BOT_LOGIN" \
               '[.[][]|select(.user.login==$bot and (.body|contains($m)))]|sort_by(.updated_at)|last|.updated_at // empty')
-            activity_args=(issue-activity --config "$BOARD_CONFIG" --repo "$issue_repo" "$number")
+            activity_args=(issue-activity --config "board-tool/$BOARD_CONFIG" --repo "$issue_repo" "$number")
             [ -n "$since" ] && activity_args+=(--since "$since")
             python3 board-tool/board.py "${activity_args[@]}" > "activity-$number.json"
             pr_count=$(jq '.linked_prs | length' "activity-$number.json")

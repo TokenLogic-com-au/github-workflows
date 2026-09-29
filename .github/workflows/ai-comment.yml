@@ -18,13 +18,6 @@ on:
       config:
         required: true
         type: string
-      discord_bot_ref:
-        description: "Bot commit SHA, required for kind: scope."
-        type: string
-        default: ""
-      bot_config:
-        required: true
-        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -69,11 +62,9 @@ jobs:
         run: |
           missing=()
           [ -z "${{ inputs.board_app_ref }}" ] && missing+=("board_app_ref")
-          [ -z "${{ inputs.discord_bot_ref }}" ] && missing+=("discord_bot_ref")
           [ -z "${{ inputs.config }}" ] && missing+=("config")
           [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
           [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
-          [ -z "${{ vars.BOT_REPO }}" ] && missing+=("vars.BOT_REPO")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "Error: kind=scope requires the following inputs/vars: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
             exit 1
@@ -123,21 +114,25 @@ jobs:
           path: board-tool
           token: ${{ steps.mint.outputs.token }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Get the issue card from the board
         if: steps.gate.outputs.number != '' && inputs.kind == 'scope'
+        uses: ./board-tool
         with:
-          python-version: "3.12"
+          command: issue-card
+          args: ${{ steps.gate.outputs.number }}
+          output: card.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
       - name: Collect the subject
         if: steps.gate.outputs.number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_TOKEN: ${{ steps.mint.outputs.token }}
-          BOARD_TOKEN: ${{ steps.mint.outputs.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ steps.gate.outputs.number }}
           KIND: ${{ inputs.kind }}
           BODY: ${{ github.event.issue.body }}
-          BOARD_CONFIG: ${{ inputs.config }}
         run: |
           if [ "$KIND" = "review" ]; then
             owner="${REPO%%/*}"
@@ -189,7 +184,7 @@ jobs:
             # (the board is the source of truth for status; the raw GitHub
             # event has no notion of project-board columns), so scope.md can
             # flag a multi-assignee or a body-vs-board status mismatch.
-            card=$(GH_TOKEN="$BOARD_TOKEN" python3 board-tool/board.py issue-card --config "$BOARD_CONFIG" "$NUMBER")
+            card=$(cat card.json)
             assignees=$(printf '%s' "$card" | jq -r '(.assignees // []) | join(", ")')
             status=$(printf '%s' "$card" | jq -r '.status // ""')
             {
@@ -287,37 +282,46 @@ jobs:
             exit 0
           fi
           gh api "repos/$REPO/issues/$NUMBER/labels/ai-review" -X DELETE || true
-      - name: Mint app token for the bot checkout
-        id: mint-discord
+      - name: Mint checkout token (board app)
+        id: mint-checkout
         if: inputs.kind == 'scope'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ vars.BOT_REPO }}
+          repositories: ${{ vars.BOARD_APP_REPO }}
           permission-contents: read
-      - name: Check out the bot
+      - name: Check out the board app
         if: inputs.kind == 'scope'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
-          ref: ${{ inputs.discord_bot_ref }}
-          path: bot-tool
-          token: ${{ steps.mint-discord.outputs.token }}
+          repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
+          ref: ${{ inputs.board_app_ref }}
+          path: board-tool
+          token: ${{ steps.mint-checkout.outputs.token }}
           persist-credentials: false
-      - name: Single-issue quality check
+      - name: Build single-issue results.json
         if: inputs.kind == 'scope'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ needs.collect.outputs.number }}
           AUTHOR: ${{ github.event.issue.user.login }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          BOT_CONFIG: ${{ inputs.bot_config }}
         run: |
           title=$(gh api "repos/$REPO/issues/$NUMBER" --jq .title)
           url=$(gh api "repos/$REPO/issues/$NUMBER" --jq .html_url)
           assignees=$(gh api "repos/$REPO/issues/$NUMBER" --jq '[.assignees[].login]')
           python3 "$GW/render_ai_comment.py" results out.md "$NUMBER" "$title" "$url" "$assignees" results.json "$AUTHOR"
-          python3 bot-tool/issue_quality.py single results.json
+      - name: Single-issue quality check
+        if: inputs.kind == 'scope'
+        uses: ./board-tool
+        with:
+          command: quality-post
+          args: single results.json
+          config: ${{ inputs.config }}
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          discord-bot-token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          board-live: ${{ !inputs.dry_run }}
+          discord-live: ${{ !inputs.dry_run }}
