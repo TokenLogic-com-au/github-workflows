@@ -500,6 +500,61 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.scope.outputs.count == '1'
+        with:
+          sparse-checkout: |
+            ${{ needs.scope.outputs.dir }}
+          sparse-checkout-cone-mode: false
+      - name: Resolve the Upstream PR line
+        id: upstream
+        if: needs.scope.outputs.count == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DIR: ${{ needs.scope.outputs.dir }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          FORK_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          FORK_PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Repo-level fact (is this repo a fork, and of what), independent of
+          # the proposal folder -- recomputed every run so a later un-forking
+          # or re-pointing is picked up without a stale line lingering.
+          repo_json=$(gh api "repos/$REPO" 2>/dev/null || echo '{}')
+          is_fork=$(echo "$repo_json" | jq -r '.fork // false')
+          parent_repo=$(echo "$repo_json" | jq -r '.parent.full_name // empty')
+          parent_default_branch=""
+          existing_pr_json="null"
+          simple_summary=""
+          if [ "$is_fork" = "true" ] && [ -n "$parent_repo" ]; then
+            parent_default_branch=$(gh api "repos/$parent_repo" --jq '.default_branch' 2>/dev/null || echo "")
+            existing_pr_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null \
+              | jq -c '(. | sort_by(.updated_at) | reverse | .[0]) // null' 2>/dev/null || echo null)
+            md=$(find "$DIR" -maxdepth 1 -name '*.md' 2>/dev/null | head -1)
+            if [ -n "$md" ]; then
+              simple_summary=$(MD_PATH="$md" python3 -c 'import os, sys; sys.path.insert(0, os.environ["GW"]); from upstream_pr import extract_simple_summary, first_two_sentences; print(first_two_sentences(extract_simple_summary(open(os.environ["MD_PATH"], encoding="utf-8").read())))')
+            fi
+          fi
+          fork_repo="${REPO#*/}"
+          line=$(jq -n \
+            --argjson is_fork "$is_fork" \
+            --arg parent_repo "$parent_repo" \
+            --arg parent_default_branch "$parent_default_branch" \
+            --arg fork_owner "$FORK_OWNER" \
+            --arg fork_repo "$fork_repo" \
+            --arg head_branch "$HEAD_BRANCH" \
+            --arg pr_title "$PR_TITLE" \
+            --arg fork_pr_url "$FORK_PR_URL" \
+            --arg simple_summary "$simple_summary" \
+            --argjson existing_pr "$existing_pr_json" \
+            '{is_fork:$is_fork, parent_repo:$parent_repo, parent_default_branch:$parent_default_branch,
+              fork_owner:$fork_owner, fork_repo:$fork_repo, head_branch:$head_branch, pr_title:$pr_title,
+              fork_pr_url:$fork_pr_url, simple_summary:$simple_summary,
+              existing_pr: (if $existing_pr == null then null else
+                {number:$existing_pr.number, state:$existing_pr.state, html_url:$existing_pr.html_url} end)}' \
+            | python3 "$GW/upstream_pr.py")
+          echo "line=$(printf '%s' "$line" | base64 -w0)" >> "$GITHUB_OUTPUT"
       - name: Post the check summary comment
         continue-on-error: true
         env:
@@ -521,6 +576,7 @@ jobs:
           ADVISORY_HAS_ISSUES: ${{ needs.advisory.outputs.has_issues }}
           REPO_FULL: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UPSTREAM_LINE: ${{ steps.upstream.outputs.line }}
         run: |
           if [ "$SCOPE_COUNT" = "0" ]; then
             echo "No proposal folder changed in this PR; proposal checks skipped." > summary_body.md
@@ -531,18 +587,20 @@ jobs:
             ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
             sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
             cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
+            upstream_line_plain=$(printf '%s' "$UPSTREAM_LINE" | base64 -d 2>/dev/null || true)
             jq -n \
               --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
               --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
               --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
               --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
-              --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
+              --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" --arg upstream_line "$upstream_line_plain" \
               '{
                 results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
                 advisory_has_issues: ($adv_issues == "1"),
                 repo: $repo, head_sha: $head_sha,
                 details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
-                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
+                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url,
+                upstream_pr_line: $upstream_line
               }' > summary_payload.json
             python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
               echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md

@@ -74,6 +74,7 @@ def render(
     advisory_has_issues: bool = False,
     repo: str = "",
     head_sha: str = "",
+    upstream_pr_line: str = "",
 ) -> str:
     lines = ["**Check summary**", ""]
     for name in CHECK_ORDER:
@@ -104,6 +105,10 @@ def render(
         lines.append("")
         lines.append(f"Advisory comment (forum-vs-payload spec check): {advisory_url}")
 
+    if upstream_pr_line:
+        lines.append("")
+        lines.append(upstream_pr_line)
+
     return "\n".join(lines)
 
 
@@ -120,6 +125,7 @@ def main():
         payload.get("advisory_has_issues", False),
         payload.get("repo", ""),
         payload.get("head_sha", ""),
+        payload.get("upstream_pr_line", ""),
     )
     sys.stdout.write(out)
 

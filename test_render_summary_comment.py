@@ -75,6 +75,17 @@ class RenderTests(unittest.TestCase):
         out = rsc.render(results, {}, "", "", "", False, REPO, SHA)
         self.assertIn("[!CAUTION]", out)
 
+    def test_upstream_pr_line_appended_when_present(self):
+        results = {k: "success" for k in rsc.CHECK_ORDER}
+        line = "Upstream PR: [open a prefilled PR on aave-dao/aave-proposals-v3](https://github.com/x)"
+        out = rsc.render(results, {}, "100", "100", "", False, REPO, SHA, upstream_pr_line=line)
+        self.assertIn(line, out)
+
+    def test_no_upstream_pr_line_when_absent(self):
+        results = {k: "success" for k in rsc.CHECK_ORDER}
+        out = rsc.render(results, {}, "100", "100", "", False, REPO, SHA, upstream_pr_line="")
+        self.assertNotIn("Upstream PR", out)
+
     def test_no_repo_or_sha_falls_back_to_plain_filename(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "address-book": "failure"}
         details = {"address-book": "src/x.sol|3|not in book"}
