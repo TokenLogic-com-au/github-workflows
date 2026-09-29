@@ -75,6 +75,7 @@ runs:
         in_scope=0
         current_file=""
         uncovered_sample=""
+        nl=$'\n'
         uncovered_count=0
         while IFS= read -r line; do
           case "$line" in
@@ -101,7 +102,7 @@ runs:
                 hits="${da#*,}"
                 hits="${hits%%,*}"
                 if [ "$hits" = "0" ]; then
-                  uncovered_sample="${uncovered_sample}${current_file}:${lno}$(printf '\n')"
+                  uncovered_sample="${uncovered_sample}${current_file}:${lno}${nl}"
                   uncovered_count=$((uncovered_count + 1))
                 fi
               fi
