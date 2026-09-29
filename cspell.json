@@ -5,6 +5,6 @@
   "dictionaryDefinitions": [
     { "name": "aave-terms", "path": "./aave-wordlist.txt" }
   ],
-  "words": ["AUSD"],
+  "words": ["AUSD", "borrowable", "stablecoins", "flashloanable"],
   "ignorePaths": ["lib/**", "node_modules/**", "out/**", "cache/**", "diffs/**", "reports/**"]
 }
