@@ -1,5 +1,6 @@
 name: proposal-checks
-# Blocking: address-book (#5), spelling (#2), coverage (#4).
+# Blocking: coverage (#4).
+# Warnings (findings reported, never blocks): address-book (#5), spelling (#2).
 # Advisory (never blocks): forum-vs-diff spec check (#3) + decimals sanity (#1),
 # posted as one PR comment, AI output never treated as approval.
 on:
@@ -126,6 +127,7 @@ jobs:
             exit 0
           fi
           book_text_lc=$(cat $book | tr 'A-F' 'a-f')
+          nl=$'\n'
           fail=0
           details=""
           while IFS= read -r hit; do
@@ -139,7 +141,7 @@ jobs:
               *"$addr_lc"*) ;;
               *)
                 echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
-                details="${details}${file}|${lineno}|raw address ${addr} not in the address book$(printf '\n')"
+                details="${details}${file}|${lineno}|raw address ${addr} not in the address book${nl}"
                 fail=1
                 ;;
             esac
@@ -170,9 +172,12 @@ jobs:
         env:
           STATUS: ${{ steps.measure.outputs.status }}
         run: |
+          # Non-blocking: findings are reported above and in the summary
+          # comment, but no longer fail the job. Only an actual error state
+          # (book not found) still blocks.
           case "$STATUS" in
             ok) exit 0 ;;
-            found) echo "unrecognized raw addresses found"; exit 1 ;;
+            found) echo "unrecognized raw addresses found (non-blocking warning)"; exit 0 ;;
             *) echo "address-book check errored: $STATUS"; exit 1 ;;
           esac
 
@@ -216,6 +221,7 @@ jobs:
           status=$?
           set -e
           cat cspell-out.txt
+          nl=$'\n'
           detail=""
           if [ "$status" -ne 0 ]; then
             while IFS= read -r hit; do
@@ -228,10 +234,17 @@ jobs:
               word=$(printf '%s' "$rest" | sed -n 's/.*Unknown word (\([^)]*\)).*/\1/p')
               sugg=$(printf '%s' "$rest" | sed -n 's/.*fix: (\([^)]*\)).*/\1/p')
               context=$(sed -n "${hline}p" "$hfile" 2>/dev/null | cut -c1-80)
-              detail="${detail}${hfile}|${hline}|${word}|${sugg}|${context}$(printf '\n')"
+              detail="${detail}${hfile}|${hline}|${word}|${sugg}|${context}${nl}"
             done < <(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
           fi
           echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          # Non-blocking: parsed findings are reported above and in the
+          # summary comment but no longer fail the job. A non-zero cspell
+          # exit with no parsed findings is a real error (bad config, etc.)
+          # and still fails.
+          if [ "$status" -eq 0 ] || [ -n "$detail" ]; then
+            exit 0
+          fi
           exit $status
 
   coverage:

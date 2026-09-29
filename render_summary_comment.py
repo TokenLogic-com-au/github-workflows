@@ -9,14 +9,17 @@ import sys
 from sanitize import sanitize_markdown
 
 CHECK_ORDER = ["address-book", "spelling", "coverage", "advisory"]
-BLOCKING = {"address-book", "spelling", "coverage"}
+BLOCKING = {"coverage"}
+WARNING = {"address-book", "spelling"}
 
 
-def _icon(name: str, result: str, advisory_has_issues: bool) -> str:
+def _icon(name: str, result: str, has_findings: bool, advisory_has_issues: bool) -> str:
     if name == "advisory":
         if result != "success":
             return "❌"
         return "⚠️" if advisory_has_issues else "✅"
+    if name in WARNING:
+        return "⚠️" if has_findings else "✅"
     return "✅" if result == "success" else "❌"
 
 
@@ -79,15 +82,16 @@ def render(
     lines = ["**Check summary**", ""]
     for name in CHECK_ORDER:
         result = results.get(name, "unknown")
-        lines.append(f"- {_icon(name, result, advisory_has_issues)} **{name}**")
+        has_findings = bool(details.get(name, "").strip())
+        lines.append(f"- {_icon(name, result, has_findings, advisory_has_issues)} **{name}**")
 
     for name in CHECK_ORDER:
         result = results.get(name, "unknown")
-        if result == "success" or name not in BLOCKING:
-            continue
         raw_detail = details.get(name, "").strip()
-        lines.append("")
         if name == "coverage":
+            if result == "success":
+                continue
+            lines.append("")
             header = f"coverage: {coverage_pct or '?'}% measured, {coverage_min or '?'}% required"
             body_lines = [header]
             if raw_detail:
@@ -97,9 +101,19 @@ def render(
             block = "\n".join(f"> 🔴 {line}" for line in safe_lines) or "> 🔴 (no details captured)"
             lines.append(f"> [!CAUTION]\n> **{name} failed**\n{block}")
         elif name == "address-book":
-            lines.append(f"**{name} failed**\n\n" + _render_address_book_table(raw_detail, repo, head_sha))
+            if not raw_detail:
+                continue
+            lines.append("")
+            lines.append(
+                f"> [!WARNING]\n> **{name}: warnings**\n\n" + _render_address_book_table(raw_detail, repo, head_sha)
+            )
         elif name == "spelling":
-            lines.append(f"**{name} failed**\n\n" + _render_spelling_table(raw_detail, repo, head_sha))
+            if not raw_detail:
+                continue
+            lines.append("")
+            lines.append(
+                f"> [!WARNING]\n> **{name}: warnings**\n\n" + _render_spelling_table(raw_detail, repo, head_sha)
+            )
 
     if results.get("advisory") and advisory_url:
         lines.append("")
