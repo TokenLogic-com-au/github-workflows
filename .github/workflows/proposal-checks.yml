@@ -446,6 +446,12 @@ jobs:
           else
             echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
           fi
+      - name: Find the repo's PR template (if any)
+        id: pr_template
+        if: steps.folder.outputs.md != ''
+        run: |
+          tmpl=$(find .github -maxdepth 1 -iname 'pull_request_template.md' 2>/dev/null | head -1)
+          echo "path=${tmpl:-}" >> "$GITHUB_OUTPUT"
       - name: Post one advisory comment
         id: post
         if: steps.folder.outputs.md != ''
@@ -457,6 +463,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
           DIFF_SOURCE: ${{ steps.diff.outputs.source }}
           FORK_TEST_STATUS: ${{ steps.diff.outputs.fork_test_status }}
+          # Never interpolated into the script text -- read only through the
+          # environment, same as every other untrusted PR-supplied value here.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TEMPLATE_PATH: ${{ steps.pr_template.outputs.path }}
         run: |
           if [ "$DRY_RUN" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
@@ -464,7 +474,13 @@ jobs:
           fi
           diff_report_path="${{ steps.diff.outputs.report }}"
           printf '%s' "$FORK_TEST_STATUS" > fork-status.txt
-          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt
+          printf '%s' "$PR_BODY" > pr-body.txt
+          if [ -n "$PR_TEMPLATE_PATH" ]; then
+            cat "$PR_TEMPLATE_PATH" > pr-template.txt
+          else
+            : > pr-template.txt
+          fi
+          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt
           if [ "$DIFF_SOURCE" = "committed" ]; then
             diff_note="_Diff report: committed by the author._"
           else
@@ -500,23 +516,18 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.scope.outputs.count == '1'
-        with:
-          sparse-checkout: |
-            ${{ needs.scope.outputs.dir }}
-          sparse-checkout-cone-mode: false
       - name: Resolve the Upstream PR line
         id: upstream
         if: needs.scope.outputs.count == '1'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          DIR: ${{ needs.scope.outputs.dir }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           FORK_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          FORK_PR_URL: ${{ github.event.pull_request.html_url }}
+          # Never interpolated into the script text -- read only through the
+          # environment, same as every other untrusted PR-supplied value here.
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           # Repo-level fact (is this repo a fork, and of what), independent of
           # the proposal folder -- recomputed every run so a later un-forking
@@ -526,7 +537,6 @@ jobs:
           parent_repo=$(echo "$repo_json" | jq -r '.parent.full_name // empty')
           parent_default_branch=""
           candidate_prs_json="[]"
-          simple_summary=""
           if [ "$is_fork" = "true" ] && [ -n "$parent_repo" ]; then
             parent_default_branch=$(gh api "repos/$parent_repo" --jq '.default_branch' 2>/dev/null || echo "")
             if [ -z "$parent_default_branch" ]; then
@@ -536,10 +546,6 @@ jobs:
             # recently updated) is pick_upstream_pr's job, not jq's -- keeps it
             # testable and out of the workflow.
             candidate_prs_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null || echo '[]')
-            md=$(find "$DIR" -maxdepth 1 -name '*.md' 2>/dev/null | head -1)
-            if [ -n "$md" ]; then
-              simple_summary=$(MD_PATH="$md" python3 -c 'import os, sys; sys.path.insert(0, os.environ["GW"]); from upstream_pr import extract_simple_summary, first_two_sentences; print(first_two_sentences(extract_simple_summary(open(os.environ["MD_PATH"], encoding="utf-8").read())))')
-            fi
           fi
           fork_repo="${REPO#*/}"
           line=$(jq -n \
@@ -550,12 +556,11 @@ jobs:
             --arg fork_repo "$fork_repo" \
             --arg head_branch "$HEAD_BRANCH" \
             --arg pr_title "$PR_TITLE" \
-            --arg fork_pr_url "$FORK_PR_URL" \
-            --arg simple_summary "$simple_summary" \
+            --arg fork_pr_body "$PR_BODY" \
             --argjson candidate_prs "$candidate_prs_json" \
             '{is_fork:$is_fork, parent_repo:$parent_repo, parent_default_branch:$parent_default_branch,
               fork_owner:$fork_owner, fork_repo:$fork_repo, head_branch:$head_branch, pr_title:$pr_title,
-              fork_pr_url:$fork_pr_url, simple_summary:$simple_summary,
+              fork_pr_body:$fork_pr_body,
               candidate_prs: [$candidate_prs[] | {number, state, html_url, updated_at}]}' \
             | python3 "$GW/upstream_pr.py")
           echo "line=$(printf '%s' "$line" | base64 -w0)" >> "$GITHUB_OUTPUT"

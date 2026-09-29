@@ -31,6 +31,20 @@ def _parse_forum_json(ai_out_text: str):
     return data["forum"], None
 
 
+def render_pr_description_alert(unresolved_items: list) -> str:
+    """Flags an unfinished fork PR description -- an unedited PR-template
+    line, or an unticked checklist box -- still in the way of the Upstream
+    PR prefill (upstream_pr.find_unresolved_template_items)."""
+    if not unresolved_items:
+        return ""
+    lines = [f"> 🟠 {sanitize_markdown(item, 200)}" for item in unresolved_items[:10]]
+    return (
+        "> [!WARNING]\n> **PR description looks unfinished** (still has unedited template "
+        "text or unticked checklist boxes -- this also becomes the Upstream PR body):\n"
+        + "\n".join(lines)
+    )
+
+
 def render_scale_alert(scale_check_output: str) -> str:
     flags = [
         line.strip()
@@ -78,9 +92,20 @@ def render_comparison_alerts(comparison: dict) -> str:
     return "\n\n".join(blocks)
 
 
-def build(ai_out_text: str, diff_report_text: str, scale_out_text: str, fork_test_status: str = "") -> str:
+def build(
+    ai_out_text: str,
+    diff_report_text: str,
+    scale_out_text: str,
+    fork_test_status: str = "",
+    pr_description_unresolved: list = None,
+) -> str:
     forum_items, error = _parse_forum_json(ai_out_text)
     parts = ["**Forum-vs-payload spec check (advisory, not a review or approval)**", ""]
+
+    pr_description_alert = render_pr_description_alert(pr_description_unresolved or [])
+    if pr_description_alert:
+        parts.append(pr_description_alert)
+        parts.append("")
 
     if error:
         parts.append(f"> [!NOTE]\n> {sanitize_markdown(error, 300)}")
@@ -117,6 +142,8 @@ def main():
         sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     )
     fork_status_path = sys.argv[5] if len(sys.argv) > 5 else None
+    pr_body_path = sys.argv[6] if len(sys.argv) > 6 else None
+    pr_template_path = sys.argv[7] if len(sys.argv) > 7 else None
     with open(ai_out_path, encoding="utf-8") as f:
         ai_out_text = f.read()
     try:
@@ -136,8 +163,23 @@ def main():
                 fork_test_status = f.read()
         except FileNotFoundError:
             fork_test_status = ""
+    pr_description_unresolved = []
+    if pr_body_path and pr_template_path:
+        import upstream_pr
+
+        try:
+            with open(pr_body_path, encoding="utf-8") as f:
+                pr_body_text = f.read()
+        except FileNotFoundError:
+            pr_body_text = ""
+        try:
+            with open(pr_template_path, encoding="utf-8") as f:
+                pr_template_text = f.read()
+        except FileNotFoundError:
+            pr_template_text = ""
+        pr_description_unresolved = upstream_pr.find_unresolved_template_items(pr_body_text, pr_template_text)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(build(ai_out_text, diff_report_text, scale_out_text, fork_test_status))
+        f.write(build(ai_out_text, diff_report_text, scale_out_text, fork_test_status, pr_description_unresolved))
 
 
 if __name__ == "__main__":
