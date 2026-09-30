@@ -88,32 +88,74 @@ class ParsePayloadActionsTests(unittest.TestCase):
         sections = {a["section"] for a in out}
         self.assertEqual(sections, {usdc.lower(), usdt.lower()})
 
-    def test_true_duplicate_same_section_and_same_event_still_merges_to_one(self):
-        # Real duplicate case the dedup exists for: aave-proposals-v3's
-        # PT-AUSD-17DEC2026 Monad listing diff report emits the identical
-        # ReserveDataUpdated(liquidityIndex: 1 [...], ...) line TWICE on the
-        # SAME `#### 0x...POOL` section (once when the reserve is
-        # initialized, once after the Supply) -- same raw/decimals/
-        # recipient AND same emitting contract, so it is one real event
-        # observed twice, not two different tokens or parties, and must
-        # still collapse to a single item.
-        pool = "0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef"
-        reserve = "0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57"
+    def test_same_amount_same_token_same_recipient_different_senders_are_not_collapsed(self):
+        # Watched-fail against main (a14c955e): the dedup key had no sender
+        # identity, so 100,000 USDC from 0x1111... and from 0x2222..., both
+        # to 0x4444..., collapsed into a single item.
+        usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        sender1 = "0x" + "11" * 20
+        sender2 = "0x" + "22" * 20
+        recipient = "0x" + "44" * 20
         text = (
-            f"#### {pool}\n\n"
+            f"#### {usdc}\n\n"
             "| index | event |\n| --- | --- |\n"
-            f"| 10 | ReserveDataUpdated(reserve: {reserve} "
-            "(symbol: PT-AUSD-17DEC2026), liquidityRate: 0, stableBorrowRate: 0, "
-            "variableBorrowRate: 0, liquidityIndex: 1 [1000000000000000000000000000, 27 decimals], "
-            "variableBorrowIndex: 1 [1000000000000000000000000000, 27 decimals]) |\n"
-            f"| 21 | ReserveDataUpdated(reserve: {reserve} "
-            "(symbol: PT-AUSD-17DEC2026), liquidityRate: 0, stableBorrowRate: 0, "
-            "variableBorrowRate: 0, liquidityIndex: 1 [1000000000000000000000000000, 27 decimals], "
-            "variableBorrowIndex: 1 [1000000000000000000000000000, 27 decimals]) |\n"
+            f"| 0 | Transfer(from: {sender1}, to: {recipient}, "
+            "value: 100,000 [100000000000, 6 decimals]) |\n"
+            f"| 1 | Transfer(from: {sender2}, to: {recipient}, "
+            "value: 100,000 [100000000000, 6 decimals]) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 2)
+        senders = {a["counterparty"].lower() for a in out}
+        self.assertEqual(senders, {sender1, sender2})
+
+    def test_true_duplicate_approval_and_the_transfer_it_authorises_merges_to_one(self):
+        # Real duplicate case the new explicit rule exists for:
+        # aave-proposals-v3's GSMMigration diff report has EXECUTOR
+        # Approval(owner: EXECUTOR, spender: GSM, value: A) immediately
+        # followed by Transfer(from: EXECUTOR, to: GSM, value: A) on the
+        # SAME token section -- EXECUTOR authorizing then itself sending the
+        # exact approved amount straight to the GSM. Only the Transfer (the
+        # real fund movement) counts; the Approval is dropped as
+        # infrastructure for it, not merged by dedup-key coincidence.
+        gho = "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"
+        executor = "0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A"
+        gsm = "0xFeeb6FE430B7523fEF2a38327241eE7153779535"
+        text = (
+            f"#### {gho}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            f"| 93 | Approval(owner: {executor}, spender: {gsm}, "
+            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
+            f"| 95 | Transfer(from: {executor}, to: {gsm}, "
+            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
         )
         out = dp.parse_payload_actions(text)
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["section"], pool.lower())
+        self.assertEqual(out[0]["action"], "Transfer")
+        self.assertEqual(out[0]["counterparty"], executor)
+        self.assertEqual(out[0]["recipient"], gsm)
+
+    def test_approval_from_a_different_owner_than_the_transfers_sender_is_not_dropped(self):
+        # Negative control: same spender, same amount, same token, but the
+        # Approval's owner does NOT match the Transfer's `from` -- a
+        # different payer approved the same spender for the same amount as
+        # an unrelated Transfer moved funds. Both must still count.
+        gho = "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"
+        owner = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        other_sender = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        spender = "0xFeeb6FE430B7523fEF2a38327241eE7153779535"
+        text = (
+            f"#### {gho}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            f"| 0 | Approval(owner: {owner}, spender: {spender}, "
+            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
+            f"| 1 | Transfer(from: {other_sender}, to: {spender}, "
+            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 2)
+        actions = {a["action"] for a in out}
+        self.assertEqual(actions, {"Approve", "Transfer"})
 
     def test_duplicate_transfer_and_balance_transfer_lines_for_the_same_move_collapse_to_one(self):
         # An aToken transfer emits both a standard Transfer event and Aave's
