@@ -1,10 +1,9 @@
 {
   "version": "0.2",
-  "language": "en",
+  "language": "en,en-GB",
   "dictionaries": ["aave-terms"],
   "dictionaryDefinitions": [
     { "name": "aave-terms", "path": "./aave-wordlist.txt" }
   ],
-  "words": ["AUSD", "borrowable", "stablecoins", "flashloanable"],
   "ignorePaths": ["lib/**", "node_modules/**", "out/**", "cache/**", "diffs/**", "reports/**"]
 }
