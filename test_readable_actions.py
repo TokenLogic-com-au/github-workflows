@@ -145,7 +145,11 @@ class ListingSeedGroupingTests(unittest.TestCase):
         new_reserves = ab.new_reserve_symbols(text)
         findings = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
 
-        self.assertEqual(len(items), 6)
+        # The report's ReserveDataUpdated line for this reserve fires
+        # twice (once at init, once post-Supply) and is no longer merged
+        # (see diff_parser's module docstring): 4 seed events + 1 approval
+        # reset + 2 ReserveDataUpdated occurrences.
+        self.assertEqual(len(items), 7)
         seed = next(f for f in findings if f["sub_lines"])
         self.assertTrue(seed["line"].startswith("Listing seed for PT-AUSD-17DEC2026:"))
         self.assertIn("`EXECUTOR`", seed["line"])
@@ -153,7 +157,7 @@ class ListingSeedGroupingTests(unittest.TestCase):
         self.assertIn("minting 100,000,000", seed["line"])
         self.assertEqual(len(seed["sub_lines"]), 4)
         # every item is covered exactly once: 4 grouped + 1 approval reset;
-        # the 1 ReserveDataUpdated item is omitted by design (see
+        # both ReserveDataUpdated items are omitted by design (see
         # build_readable_findings' own docstring / test_render_advisory_comment
         # for the separately-reported omitted count)
         self.assertEqual(len(findings), 2)
