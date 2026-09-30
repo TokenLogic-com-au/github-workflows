@@ -185,10 +185,16 @@ def parse_payload_actions(diff_report_text: str):
     """Returns a list of {"action", "asset", "amount", "decimals",
     "recipient", "network", "raw_line"} extracted from decoded value lines.
 
-    Deduped on (raw, decimals, recipient) -- the exact underlying integer,
-    not the rounded human-readable display amount: two genuinely different
-    raw amounts that happen to round to the same displayed value must not
-    collapse into one finding.
+    Deduped on (raw, decimals, recipient, section) -- the exact underlying
+    integer, not the rounded human-readable display amount (two genuinely
+    different raw amounts that happen to round to the same displayed value
+    must not collapse into one finding), AND the emitting contract's own
+    address (`section`, from the nearest preceding `#### 0x...` header):
+    without it, two distinct payments of the same raw amount to the same
+    recipient in DIFFERENT tokens (e.g. 100,000 USDC and 100,000 USDT, both
+    6 decimals, from one sender to one recipient) would wrongly collapse
+    into one finding, since token identity lives only in which contract
+    emitted the Transfer/Approval, not in the event's own fields.
     """
     if not diff_report_text or not diff_report_text.strip():
         return []
@@ -210,7 +216,7 @@ def parse_payload_actions(diff_report_text: str):
         ):
             continue
         recipient = _extract_recipient(line, kind)
-        key = (m.group("raw"), m.group("decimals"), recipient)
+        key = (m.group("raw"), m.group("decimals"), recipient, sections[idx])
         if key in seen:
             continue
         seen.add(key)

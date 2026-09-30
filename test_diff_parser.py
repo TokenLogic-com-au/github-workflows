@@ -63,6 +63,58 @@ class ParsePayloadActionsTests(unittest.TestCase):
         out = dp.parse_payload_actions(text)
         self.assertEqual(len(out), 2)
 
+    def test_same_amount_same_recipient_different_tokens_are_not_collapsed(self):
+        # Watched-fail against main (7949d4e4): the dedup key had no token
+        # identity, so 100,000 USDC and 100,000 USDT (both 6 decimals) from
+        # one sender to one recipient -- two genuinely different payments,
+        # on two different token contracts -- collapsed into a single item
+        # and the second payment never reached the spec-check comment.
+        usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        usdt = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+        text = (
+            f"#### {usdc}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            "| 0 | Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 100,000 [100000000000, 6 decimals]) |\n\n"
+            f"#### {usdt}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            "| 1 | Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 100,000 [100000000000, 6 decimals]) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 2)
+        sections = {a["section"] for a in out}
+        self.assertEqual(sections, {usdc.lower(), usdt.lower()})
+
+    def test_true_duplicate_same_section_and_same_event_still_merges_to_one(self):
+        # Real duplicate case the dedup exists for: aave-proposals-v3's
+        # PT-AUSD-17DEC2026 Monad listing diff report emits the identical
+        # ReserveDataUpdated(liquidityIndex: 1 [...], ...) line TWICE on the
+        # SAME `#### 0x...POOL` section (once when the reserve is
+        # initialized, once after the Supply) -- same raw/decimals/
+        # recipient AND same emitting contract, so it is one real event
+        # observed twice, not two different tokens or parties, and must
+        # still collapse to a single item.
+        pool = "0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef"
+        reserve = "0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57"
+        text = (
+            f"#### {pool}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            f"| 10 | ReserveDataUpdated(reserve: {reserve} "
+            "(symbol: PT-AUSD-17DEC2026), liquidityRate: 0, stableBorrowRate: 0, "
+            "variableBorrowRate: 0, liquidityIndex: 1 [1000000000000000000000000000, 27 decimals], "
+            "variableBorrowIndex: 1 [1000000000000000000000000000, 27 decimals]) |\n"
+            f"| 21 | ReserveDataUpdated(reserve: {reserve} "
+            "(symbol: PT-AUSD-17DEC2026), liquidityRate: 0, stableBorrowRate: 0, "
+            "variableBorrowRate: 0, liquidityIndex: 1 [1000000000000000000000000000, 27 decimals], "
+            "variableBorrowIndex: 1 [1000000000000000000000000000, 27 decimals]) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["section"], pool.lower())
+
     def test_duplicate_transfer_and_balance_transfer_lines_for_the_same_move_collapse_to_one(self):
         # An aToken transfer emits both a standard Transfer event and Aave's
         # own BalanceTransfer event for the SAME underlying move -- both
