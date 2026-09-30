@@ -43,12 +43,13 @@ jobs:
     # A review only runs when the ai-review label was just added, and only
     # against a same-repo PR head (never a fork). A scope check keeps the
     # 24h recency gate below; a review drops it -- re-adding the label is
-    # the recency control for reviews.
+    # the recency control for reviews. Scope checks read the private board,
+    # so they stay private-repo only.
     if: >-
-      github.event.repository.private &&
-      (inputs.kind != 'review' ||
-        (github.event.action == 'labeled' && github.event.label.name == 'ai-review' &&
-         github.event.pull_request.head.repo.full_name == github.repository))
+      (inputs.kind == 'scope' && github.event.repository.private) ||
+      (inputs.kind == 'review' &&
+        github.event.action == 'labeled' && github.event.label.name == 'ai-review' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,7 +95,9 @@ jobs:
           fi
       - name: Mint read-only app token
         id: mint
-        if: steps.gate.outputs.number != ''
+        # A public repo's review never reads the linked tracker issue: its
+        # body would be quoted into a public comment.
+        if: steps.gate.outputs.number != '' && github.event.repository.private
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.BOARD_APP_ID }}
@@ -138,7 +141,8 @@ jobs:
             owner="${REPO%%/*}"
             name="${REPO#*/}"
             gh api "repos/$REPO/pulls/$NUMBER" -H "Accept: application/vnd.github.v3.diff" > diff.txt
-            issue_body=$(GH_TOKEN="$ISSUE_TOKEN" gh api graphql -f query='
+            issue_body=""
+            [ -n "$ISSUE_TOKEN" ] && issue_body=$(GH_TOKEN="$ISSUE_TOKEN" gh api graphql -f query='
               query($owner:String!,$name:String!,$num:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$num){

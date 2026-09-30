@@ -1,0 +1,31 @@
+name: required-ai-review
+# Required by the ai-review org ruleset. Runs on every PR event so the
+# required check always reports; ai-comment.yml reviews only when the
+# ai-review label was just added. Comments post only when the target repo
+# sets AI_COMMENT_LIVE=true.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+jobs:
+  # Every ai-comment.yml job skips on an unlabeled PR or a merge group; this
+  # job keeps the run's conclusion success so the required check never hangs.
+  report:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: "true"
+  ai-review:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@main"
+    with:
+      kind: review
+      backend: openrouter
+      dry_run: ${{ vars.AI_COMMENT_LIVE != 'true' }}
+      config: config.json
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

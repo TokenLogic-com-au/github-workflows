@@ -18,7 +18,7 @@ setting on this repo must allow org repositories.
 | `report-comment.yml` | Posts a CI result comment on the triggering PR, `workflow_run`-based | `workflow-name`, `dry_run` | none |
 | `proposal-checks.yml` | Governance-proposal gate: coverage (blocking), address-book + spelling (non-blocking warnings, findings still reported), forum-vs-diff spec check + decimals sanity (advisory). One proposal folder per PR: a PR touching zero `src/<dir>/` folders skips every check (green); a PR touching more than one fails fast. | `min_coverage`, `backend`, `dry_run` | `ALCHEMY_API_KEY`, `OPENROUTER_API_KEY`, `RPC_MONAD` (optional, overrides Alchemy for Monad) |
 | `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, hands the batch to board-app's `quality-post batch` (through its composite action), then appends a missing-required-fields digest (config `required_issue_fields` + `required_project_fields`) to the job summary | `statuses`, `max_issues`, `board_app_ref`, `backend`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
-| `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs. `required-proposals.yml` posts its PR comments only when the target repo sets the variable `PROPOSAL_CHECKS_LIVE=true` | — | forwarded from the ruleset repo |
+| `required-ci.yml` / `required-proposals.yml` / `required-ai-review.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` / `ai-comment.yml` (`kind: review`) with no per-repo inputs. `required-proposals.yml` posts its PR comments only when the target repo sets the variable `PROPOSAL_CHECKS_LIVE=true`; `required-ai-review.yml` runs on every PR event so its required check always reports, reviews only on an `ai-review` label add, and posts only when the target repo sets `AI_COMMENT_LIVE=true` | — | forwarded from the ruleset repo |
 | `slither.yml` | Advisory-only Slither static analysis for a Foundry repo (SARIF -> code-scanning annotations); never fails the job, no coverage-style gate | `slither_version`, `target` | none |
 | `ai-progress-note.yml` | Weekly, per In-Progress board issue: summarizes PR/commit activity and non-bot comments since its last note into one advisory issue comment (reuses `ai.py` and `render_ai_comment.py`'s footer); skips an issue with no activity since its last note | `backend`, `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` |
 | `no-reviewer-reminder.yml` | Scheduled: finds open, non-draft PRs org-wide with no requested reviewer and no review, ready for review past config's `no_reviewer_hours`, and pings the author on Discord through board-app's `no-reviewer-ping` subcommand (composite action); dedup is board.py's own marker comment, posted only once the ping actually went out | `board_app_ref`, `config`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
@@ -40,7 +40,10 @@ with a clear error if the variable it needs is empty.
 
 `ai-comment.yml`'s `kind: review` path only runs when the `ai-review` label
 is added to a PR (not on open/synchronize); it removes the label after
-posting, so re-adding it re-triggers the review. The `kind: scope` path
+posting, so re-adding it re-triggers the review. Reviews run on private and
+public repos; on a public repo the linked tracker issue is never read, so its
+body cannot reach a public comment. The `kind: scope` path runs on private
+repos only and
 keeps its 24h recency gate and its own AI comment via `render_ai_comment.py`
 (built from the model's strict-JSON output, never raw model text), plus a
 single-issue board-app quality check (`quality-post single`) right after
@@ -56,7 +59,7 @@ turns it live:
 | `AI_NOTE_LIVE` | `callers/tracker-ai-progress-note.yml` |
 | `REVIEW_REMINDER_LIVE` | `callers/tracker-no-reviewer-reminder.yml` |
 | `BOARD_SYNC_LIVE` | `callers/delivering-repo/board.yml` |
-| `AI_COMMENT_LIVE` | `callers/delivering-repo/ai.yml` |
+| `AI_COMMENT_LIVE` | `callers/delivering-repo/ai.yml`, `required-ai-review.yml` |
 | `REPORT_COMMENT_LIVE` | `callers/delivering-repo/report.yml` |
 | `PROPOSAL_CHECKS_LIVE` | `required-proposals.yml` |
 
