@@ -7,7 +7,9 @@ against the diff report's deterministically parsed payload actions
 import json
 import sys
 
+import address_book
 import diff_parser
+import readable_actions
 import spec_compare
 from sanitize import sanitize_markdown
 
@@ -59,16 +61,15 @@ def render_scale_alert(scale_check_output: str) -> str:
     return "> [!CAUTION]\n" + "\n".join(lines)
 
 
-def render_comparison_alerts(comparison: dict) -> str:
+def render_comparison_alerts(comparison: dict, readable_findings: list = None) -> str:
     blocks = []
     if comparison["unexplained"]:
         lines = []
-        for p in comparison["unexplained"]:
-            line = f"> 🔴 In payload but not in the forum post: amount `{p.get('amount')}`"
-            if p.get("recipient"):
-                line += f", recipient `{p.get('recipient')}`"
-            lines.append(sanitize_markdown(line, 300))
-        blocks.append("> [!CAUTION]\n" + "\n".join(lines))
+        for finding in readable_findings or []:
+            lines.append(sanitize_markdown(f"> 🟠 In payload but not in the forum post: {finding['line']}", 300))
+            for sub in finding.get("sub_lines", []):
+                lines.append(sanitize_markdown(f">   - {sub}", 300))
+        blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if comparison["warnings"]:
         lines = [
             sanitize_markdown(f"> 🟠 Mismatch: {w['label']}: {w['detail']}", 300)
@@ -131,7 +132,12 @@ def build(
         return "\n".join(parts)
 
     comparison = spec_compare.compare(forum_items, payload_items)
-    parts.append(render_comparison_alerts(comparison))
+    label_map, symbol_map = address_book.build_maps(diff_report_text)
+    new_reserve_symbols = address_book.new_reserve_symbols(diff_report_text)
+    readable_findings = readable_actions.build_readable_findings(
+        comparison["unexplained"], label_map, symbol_map, new_reserve_symbols
+    )
+    parts.append(render_comparison_alerts(comparison, readable_findings))
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
     return "\n".join(parts)

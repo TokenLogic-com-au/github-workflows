@@ -5,7 +5,8 @@ list (diff_parser.parse_payload_actions) and produces:
 - warnings: payload item matched to a forum item, but amount/recipient/
   decimals disagree (rendered [!WARNING])
 - unexplained: payload item with NO forum counterpart at all -- the
-  dangerous case (rendered [!CAUTION])
+  dangerous case (rendered [!WARNING], 🟠, as a plain-language finding via
+  readable_actions.py rather than a raw amount/recipient line)
 - forum_only_count: forum items with no payload counterpart -- expected
   noise when a forum post covers a whole funding update split across many
   payloads, rendered as one neutral collapsed line, never a warning.

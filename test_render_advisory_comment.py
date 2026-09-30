@@ -12,6 +12,13 @@ CLEAN_FORUM = json.dumps({"forum": [
 ]})
 CLEAN_DIFF = "value: 50,000 [50000000000000000000000, 18 decimals] to 0xAA088dfF3dcF619664094945028d44E779F19894"
 
+FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures")
+
+
+def _read_fixture(name):
+    with open(os.path.join(FIXTURES_DIR, name), encoding="utf-8") as f:
+        return f.read()
+
 
 class BuildTests(unittest.TestCase):
     def test_invalid_json_reports_extraction_failure_not_a_crash(self):
@@ -36,11 +43,17 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn("[!WARNING]", out)
         self.assertNotIn("[!CAUTION]", out)
 
-    def test_unexplained_payload_item_renders_caution(self):
+    def test_unexplained_payload_item_renders_warning_not_caution(self):
+        # Watched-fail: against the OLD renderer this asserted [!CAUTION]/🔴
+        # and a raw `amount X, recipient 0x...` line; the new one is a
+        # [!WARNING]/🟠 plain-language finding instead.
         forum = json.dumps({"forum": []})
         out = rac.build(forum, CLEAN_DIFF, "no scale-bound flags")
-        self.assertIn("[!CAUTION]", out)
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("🟠", out)
+        self.assertNotIn("[!CAUTION]", out)
         self.assertIn("In payload but not in the forum post", out)
+        self.assertNotIn("amount `50,000`, recipient `0xAA088dfF3dcF619664094945028d44E779F19894`", out)
 
     def test_amount_mismatch_renders_warning(self):
         diff = "value: 35,000 [35000000000000000000000, 18 decimals] to 0xAA088dfF3dcF619664094945028d44E779F19894"
@@ -99,6 +112,42 @@ class BuildTests(unittest.TestCase):
     def test_no_unresolved_pr_description_items_adds_nothing(self):
         out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags", pr_description_unresolved=[])
         self.assertNotIn("PR description looks unfinished", out)
+
+
+class ReadableFixtureTests(unittest.TestCase):
+    # Real CI diff reports (aave-proposals-v3), verified against a fresh
+    # `git worktree`/`git show` pull of the source repo (see the coder
+    # report) -- an empty forum posting means every payload item lands in
+    # "unexplained" and gets rendered through readable_actions.
+
+    def test_pr231_listing_renders_a_single_grouped_seed_and_no_raw_addresses(self):
+        diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
+        self.assertIn("Listing seed for PT-AUSD-17DEC2026:", out)
+        self.assertIn("EXECUTOR approves POOL to spend 100 PT-AUSD-17DEC2026", out)
+        self.assertIn("EXECUTOR resets POOL's allowance to 0", out)
+        self.assertIn("[!WARNING]", out)
+        self.assertNotIn("[!CAUTION]", out)
+        # the old renderer's raw shape must be gone
+        self.assertNotIn("amount `100`, recipient `0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef`", out)
+
+    def test_funding_update_labels_the_collector_and_atoken_not_raw_addresses(self):
+        diff = _read_fixture("ethereum_february2026_funding_update_diff.md")
+        out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
+        self.assertIn("Supply flow for WETH:", out)
+        self.assertIn("COLLECTOR", out)
+        self.assertIn("aWETH", out)
+        self.assertNotIn("Listing seed", out)
+        self.assertNotIn("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c", out)
+
+    def test_umbrella_renewal_fixture_has_no_decoded_events_and_is_reported_plainly(self):
+        # This proposal's diff report is storage-only ("## Raw diff"), so
+        # there is nothing for the parser to compare -- must fall into the
+        # existing "no parseable state-change entries" path, not crash or
+        # fabricate a finding.
+        diff = _read_fixture("umbrella_renewal_diff.md")
+        out = rac.build(CLEAN_FORUM, diff, "no scale-bound flags")
+        self.assertIn("no parseable state-change entries", out)
 
 
 class RenderPrDescriptionAlertTests(unittest.TestCase):
