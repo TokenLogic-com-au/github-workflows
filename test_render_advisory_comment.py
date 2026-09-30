@@ -117,52 +117,74 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn("PR description looks unfinished", out)
 
 
-class ReadableFixtureTests(unittest.TestCase):
-    # Real CI diff reports (aave-proposals-v3), verified against a fresh
-    # `git worktree`/`git show` pull of the source repo (see the coder
-    # report) -- an empty forum posting means every payload item lands in
-    # "unexplained" and gets rendered through readable_actions.
+class RenderComparisonAlertsRequiredArgTests(unittest.TestCase):
+    def test_readable_findings_has_no_default_and_must_be_passed(self):
+        # Watched-fail: the old signature defaulted readable_findings to
+        # None/[] and could print "No mismatches found" even with
+        # unexplained payload items if a caller forgot to build them.
+        comparison = {"unexplained": ["something"], "warnings": [], "notes": [], "forum_only_count": 0}
+        with self.assertRaises(TypeError):
+            rac.render_comparison_alerts(comparison)
 
-    def test_pr231_listing_renders_a_single_grouped_seed_and_no_raw_addresses(self):
+
+class ReadableFixtureTests(unittest.TestCase):
+    # Real CI diff reports (aave-proposals-v3) -- an empty forum posting
+    # means every payload item lands in "unexplained" and gets rendered
+    # through readable_actions.
+
+    def test_pr231_listing_renders_a_single_grouped_seed(self):
         diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
         out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
         self.assertIn("Listing seed for PT-AUSD-17DEC2026:", out)
-        self.assertIn("EXECUTOR approves POOL to spend 100 PT-AUSD-17DEC2026", out)
-        self.assertIn("EXECUTOR resets POOL's allowance to 0", out)
+        self.assertIn("`EXECUTOR`", out)
+        self.assertIn("approves `POOL`", out)
+        self.assertIn("resets `POOL`", out)
         self.assertIn("[!WARNING]", out)
         self.assertNotIn("[!CAUTION]", out)
         # the old renderer's raw shape must be gone
         self.assertNotIn("amount `100`, recipient `0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef`", out)
         # ReserveDataUpdated is accounting, not a WARNING finding
         self.assertNotIn("rate/index update", out)
-        self.assertIn("1 reserve index update (accounting, not payments) omitted from the comparison.", out)
+        # The PT-AUSD-17DEC2026 diff report has the SAME ReserveDataUpdated
+        # line twice (indices 10 and 21) -- both real, separately-omitted
+        # occurrences, counted from the raw report, not the deduped items.
+        self.assertIn("2 reserve index updates (accounting, not payments) omitted from the comparison.", out)
 
-    def test_pr231_listing_with_address_book_labels_dust_bin(self):
+    def test_pr231_listing_addresses_are_never_dropped_even_when_labelled(self):
+        diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
+        # EXECUTOR's and POOL's full addresses must both still appear
+        # alongside their labels.
+        self.assertIn("0xa9d0EAFF48cE1DF468f9eAeb7e628c413343F6A2", out)
+        self.assertIn("0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef", out)
+
+    def test_pr231_listing_with_address_book_labels_dust_bin_without_dropping_its_address(self):
         diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
         out = rac.build(
             json.dumps({"forum": []}), diff, "no scale-bound flags", "", [], ADDRESS_BOOK_SLICE
         )
         self.assertIn("AaveV3Monad.DUST_BIN", out)
-        self.assertNotIn("0xf23C", out)
+        self.assertIn("0xf23C65c8C92E42e990786523744Db9d5cdcF6cbE", out)
 
-    def test_missing_address_book_root_degrades_to_short_address(self):
+    def test_missing_address_book_root_degrades_to_the_full_address_with_no_label(self):
         diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
         out = rac.build(
             json.dumps({"forum": []}), diff, "no scale-bound flags", "", [], "/no/such/path"
         )
-        self.assertIn("0xf23C", out)
+        self.assertIn("0xf23C65c8C92E42e990786523744Db9d5cdcF6cbE", out)
         self.assertNotIn("AaveV3Monad.DUST_BIN", out)
 
-    def test_funding_update_labels_the_collector_and_atoken_not_raw_addresses(self):
+    def test_funding_update_labels_the_collector_and_atoken_and_still_shows_the_full_address(self):
         diff = _read_fixture("ethereum_february2026_funding_update_diff.md")
         out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
         self.assertIn("Supply flow for WETH:", out)
         self.assertIn("COLLECTOR", out)
         self.assertIn("aWETH", out)
         self.assertNotIn("Listing seed", out)
-        self.assertNotIn("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c", out)
+        # addresses are never dropped, even for a labelled party
+        self.assertIn("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c", out)
         self.assertNotIn("rate/index update", out)
-        self.assertIn("reserve index update", out)
+        self.assertIn("1 reserve index update (accounting, not payments) omitted from the comparison.", out)
 
     def test_umbrella_renewal_fixture_has_no_decoded_events_and_is_reported_plainly(self):
         # This proposal's diff report is storage-only ("## Raw diff"), so
@@ -172,6 +194,41 @@ class ReadableFixtureTests(unittest.TestCase):
         diff = _read_fixture("umbrella_renewal_diff.md")
         out = rac.build(CLEAN_FORUM, diff, "no scale-bound flags")
         self.assertIn("no parseable state-change entries", out)
+
+
+class InjectionResistanceTests(unittest.TestCase):
+    # A token's own on-chain `symbol()` (or any diff-report text) is
+    # untrusted -- it must never be able to forge a markdown heading, link,
+    # or break out of the backtick span this renderer wraps labels in.
+
+    def test_inline_symbol_with_embedded_newline_and_heading_produces_no_heading(self):
+        diff = (
+            "#### 0xAA088dfF3dcF619664094945028d44E779F19894\n\n"
+            "| index | event |\n| --- | --- |\n"
+            "| 0 | Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xAA088dfF3dcF619664094945028d44E779F19894 (symbol: X\n# LGTM\n), "
+            "value: 50,000 [50000000000000000000000, 18 decimals]) |\n"
+        )
+        out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
+        self.assertNotIn("# LGTM", out)
+        self.assertNotIn("\n# ", out)
+
+    def test_reserve_header_symbol_with_markdown_link_produces_no_link(self):
+        diff = (
+            "## Reserve changes\n\n### Reserves added\n\n"
+            "#### [x](https://github.com/evil) ([0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57]"
+            "(https://etherscan.io/address/0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57))\n\n"
+            "| description | value |\n| --- | --- |\n| id | 13 |\n\n"
+            "## Event logs\n\n"
+            "#### 0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57\n\n"
+            "| index | event |\n| --- | --- |\n"
+            "| 0 | Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xAA088dfF3dcF619664094945028d44E779F19894, "
+            "value: 50,000 [50000000000000000000000, 18 decimals]) |\n"
+        )
+        out = rac.build(json.dumps({"forum": []}), diff, "no scale-bound flags")
+        self.assertNotIn("](https://github.com", out)
+        self.assertNotIn("[x]", out)
 
 
 class RenderPrDescriptionAlertTests(unittest.TestCase):

@@ -2,11 +2,13 @@
 payload action IS, in address-book names, token and amount -- instead of
 raw `amount X, recipient 0x...` lines. Recognizes the common protocol
 patterns (a new-listing seed: approve -> supply on behalf of X -> aToken
-mint; an approval reset to 0; a generic Pool/Configurator config event) and
-groups a seed's events into one summary line, keeping the underlying events
-listed beneath it. Any event that matches none of these still gets a
-readable line built from its event name, token/contract label, and amount --
-never a silent drop.
+mint; an approval reset to 0) and groups a seed's events into one summary
+line, keeping the underlying events listed beneath it. Any event that
+matches none of these still gets a readable line built from its event
+name, token/contract label, and amount -- never a silent drop, except a
+`ReserveDataUpdated` accounting line, which build_readable_findings omits
+by design (the caller reports its count separately, see
+diff_parser.count_reserve_data_updates).
 """
 from address_book import describe_address
 
@@ -33,12 +35,15 @@ def _amount_text(item, symbol_map):
         # decimals: 0 on a token that is not genuinely a 0-decimal asset
         # means the diff report's decoder could not resolve the real
         # decimals (typical for a brand-new aToken in a listing) -- the
-        # displayed number is the raw integer, not a scaled human amount.
-        suffix = f" {symbol}" if symbol else ""
+        # displayed number really is the raw, unscaled integer.
+        suffix = f" `{symbol}`" if symbol else ""
         return f"{amount}{suffix} (raw, decimals unknown)"
     if symbol:
-        return f"{amount} {symbol}"
-    return f"{amount} (raw)"
+        return f"{amount} `{symbol}`"
+    # decimals are known and diff_parser's own "human" group is already the
+    # correctly-scaled amount -- there is nothing raw about it, it just has
+    # no token name to show.
+    return amount
 
 
 def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=None) -> str:
@@ -48,8 +53,8 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
     group's sub-lines. `solidity_labels`/`chain` (from
     address_book.load_solidity_labels/infer_chain) are an optional second
     naming source for a party the diff report itself never labelled (no
-    `####`/`###` section of its own) -- omitting them just falls back to a
-    short address, exactly like before this source existed."""
+    `####`/`###` section of its own) -- omitting them just falls back to
+    the full address, exactly like before this source existed."""
     event_name = item.get("event_name") or item.get("action")
     recipient = item.get("recipient")
     counterparty = item.get("counterparty")
@@ -76,15 +81,6 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
         beneficiary = _addr(item.get("on_behalf_of"))
         return f"Supply: {amount_text} supplied on behalf of {beneficiary}"
 
-    if event_name and event_name.endswith("CapChanged"):
-        cap_kind = event_name[: -len("CapChanged")]
-        symbol = _token_symbol(item, symbol_map) or _addr(recipient)
-        return f"{cap_kind} cap on {symbol} set to {item.get('amount')}"
-
-    if event_name == "ReserveDataUpdated":
-        symbol = _token_symbol(item, symbol_map) or _addr(recipient)
-        return f"{symbol} rate/index update (not a payment): {amount_text}"
-
     recipient_label = _addr(recipient)
     return f"{event_name or 'Event'}: {amount_text}, contract {recipient_label}"
 
@@ -92,16 +88,28 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
 def _find_listing_seed_groups(
     items, label_map, symbol_map, new_reserve_symbols=frozenset(), solidity_labels=None, chain=None
 ):
-    """A seed flow is: a nonzero Approval on the reserve's own token
-    section -> a Supply on behalf of some beneficiary -> the payer's
-    Transfer of the underlying token to the aToken -> the aToken's
-    from-zero Transfer (mint) to that same beneficiary. diff_parser's
-    fallback address extraction happens to put the reserve's own address in
-    a Supply item's `recipient` field (the first 0x address on a `Supply(
-    reserve: 0x..., onBehalfOf: ..., ...)` line, since it has no `to:`
-    label) -- that quirk is exactly the key this needs to link an Approval
-    (emitted on the reserve's own `####` section) and a Supply to the same
-    reserve.
+    """A seed flow is: a Supply, on behalf of some beneficiary, paid for by
+    a payer (the Supply's own `user` field) -- matched to:
+
+    - an Approval emitted on the reserve's own token section, whose
+      spender is the Supply's own pool (the Supply's `section`), whose
+      owner is the Supply's payer, and whose amount equals the supplied
+      amount;
+    - a Transfer, also on the reserve's own token section, from that same
+      payer to the reserve's aToken, for the same amount;
+    - the aToken's own from-zero Transfer (the mint) to the Supply's
+      beneficiary.
+
+    Every field is checked explicitly so an unrelated Approval sitting in
+    the same token section (a different spender, a different owner, or a
+    different amount) is never swept into the group -- it stays its own
+    finding.
+
+    diff_parser's fallback address extraction happens to put the reserve's
+    own address in a Supply item's `recipient` field (the first 0x address
+    on a `Supply(reserve: 0x..., onBehalfOf: ..., ..., user: 0x..., ...)`
+    line, since it has no `to:` label) -- that quirk is exactly the key
+    used to find the Approval/Transfer on the same reserve.
 
     The exact same event shape also happens on an ALREADY-listed reserve
     (e.g. a funding update reinvesting swapped fees) -- only a reserve
@@ -114,9 +122,13 @@ def _find_listing_seed_groups(
         if supply.get("event_name") != "Supply":
             continue
         reserve_addr = (supply.get("recipient") or "").lower()
+        pool_addr = (supply.get("section") or "").lower()
         beneficiary = supply.get("on_behalf_of")
-        if not reserve_addr or not beneficiary:
+        payer = supply.get("user")
+        supply_amount = supply.get("amount")
+        if not reserve_addr or not pool_addr or not beneficiary or not payer:
             continue
+        payer_lower = payer.lower()
 
         approval = next(
             (
@@ -124,8 +136,11 @@ def _find_listing_seed_groups(
                 for it in items
                 if id(it) not in used_ids
                 and it.get("event_name") == "Approval"
-                and (it.get("section") or "") == reserve_addr
-                and it.get("amount") not in (None, "0")
+                and (it.get("section") or "").lower() == reserve_addr
+                and (it.get("recipient") or "").lower() == pool_addr
+                and it.get("counterparty")
+                and it["counterparty"].lower() == payer_lower
+                and it.get("amount") == supply_amount
             ),
             None,
         )
@@ -135,9 +150,10 @@ def _find_listing_seed_groups(
                 for it in items
                 if id(it) not in used_ids
                 and it.get("event_name") == "Transfer"
-                and (it.get("section") or "") == reserve_addr
+                and (it.get("section") or "").lower() == reserve_addr
                 and it.get("counterparty")
-                and not _is_zero_address(it["counterparty"])
+                and it["counterparty"].lower() == payer_lower
+                and it.get("amount") == supply_amount
             ),
             None,
         )
@@ -150,7 +166,7 @@ def _find_listing_seed_groups(
                 for it in items
                 if id(it) not in used_ids
                 and it.get("event_name") == "Transfer"
-                and (it.get("section") or "") == atoken_addr
+                and (it.get("section") or "").lower() == atoken_addr
                 and _is_zero_address(it.get("counterparty"))
                 and it.get("recipient") == beneficiary
             ),
@@ -166,9 +182,7 @@ def _find_listing_seed_groups(
         reserve_symbol = _token_symbol(supply, symbol_map) or describe_address(
             reserve_addr, label_map, symbol_map, solidity_labels, chain
         )
-        payer_label = describe_address(
-            underlying_transfer.get("counterparty"), label_map, symbol_map, solidity_labels, chain
-        )
+        payer_label = describe_address(payer, label_map, symbol_map, solidity_labels, chain)
         beneficiary_label = describe_address(beneficiary, label_map, symbol_map, solidity_labels, chain)
         kind = "Listing seed" if reserve_symbol in new_reserve_symbols else "Supply flow"
         summary = (
@@ -191,30 +205,25 @@ def _find_listing_seed_groups(
 def build_readable_findings(
     items, label_map, symbol_map, new_reserve_symbols=frozenset(), solidity_labels=None, chain=None
 ):
-    """Returns (findings, omitted_index_updates):
-
-    - findings: [{"line": str, "sub_lines": [str, ...]}] covering every
-      item in `items` except a `ReserveDataUpdated` accounting line, exactly
-      once. A seed flow (a new listing, or an ordinary supply into an
-      existing reserve) collapses into one summary line with its underlying
-      events as sub_lines; everything else (including any event outside the
-      recognized patterns) gets its own single-line description.
-    - omitted_index_updates: how many `ReserveDataUpdated` items were left
-      out -- these are the protocol accounting a rate/liquidity index, never
-      a payment, so they are reported as one summary count rather than as
-      findings (nothing else is ever omitted this way).
-    """
+    """Returns [{"line": str, "sub_lines": [str, ...]}] covering every item
+    in `items` except a `ReserveDataUpdated` accounting line (protocol
+    bookkeeping -- a rate/liquidity index -- never a payment; the caller
+    reports how many were omitted separately, counted from the raw diff
+    report rather than this deduped `items` list, since the same index can
+    legitimately update more than once in one execution). A seed flow (a
+    new listing, or an ordinary supply into an existing reserve) collapses
+    into one summary line with its underlying events as sub_lines;
+    everything else (including any event outside the recognized patterns)
+    gets its own single-line description."""
     seed_groups = _find_listing_seed_groups(
         items, label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
     )
     grouped_ids = {id(member) for group in seed_groups for member in group["members"]}
     findings = [{"line": g["line"], "sub_lines": g["sub_lines"]} for g in seed_groups]
-    omitted_index_updates = 0
     for item in items:
         if id(item) in grouped_ids:
             continue
         if item.get("event_name") == "ReserveDataUpdated":
-            omitted_index_updates += 1
             continue
         findings.append(
             {
@@ -222,4 +231,4 @@ def build_readable_findings(
                 "sub_lines": [],
             }
         )
-    return findings, omitted_index_updates
+    return findings

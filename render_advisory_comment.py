@@ -61,11 +61,11 @@ def render_scale_alert(scale_check_output: str) -> str:
     return "> [!CAUTION]\n" + "\n".join(lines)
 
 
-def render_comparison_alerts(
-    comparison: dict, readable_findings: list = None, omitted_index_updates: int = 0
-) -> str:
+def render_comparison_alerts(comparison: dict, readable_findings: list, omitted_index_updates: int = 0) -> str:
+    """`readable_findings` is required (not `None`-defaulted): a caller
+    that forgets to build it must fail loudly, not silently print "No
+    mismatches found" while `comparison["unexplained"]` is nonempty."""
     blocks = []
-    readable_findings = readable_findings or []
     if readable_findings:
         lines = []
         for finding in readable_findings:
@@ -148,9 +148,13 @@ def build(
     # raising -- callers that don't pass one at all get today's behaviour.
     solidity_labels = address_book.load_solidity_labels(address_book_root)
     chain = address_book.infer_chain(diff_report_text)
-    readable_findings, omitted_index_updates = readable_actions.build_readable_findings(
+    readable_findings = readable_actions.build_readable_findings(
         comparison["unexplained"], label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
     )
+    # Counted from the RAW diff report, not the deduped `payload_items` --
+    # the same reserve index can legitimately update more than once in one
+    # execution, and each occurrence was real, omitted activity.
+    omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
     parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates))
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
