@@ -109,47 +109,21 @@ class ParsePayloadActionsTests(unittest.TestCase):
         senders = {a["counterparty"].lower() for a in out}
         self.assertEqual(senders, {sender1, sender2})
 
-    def test_true_duplicate_approval_and_the_transfer_it_authorises_merges_to_one(self):
-        # Real duplicate case the new explicit rule exists for:
-        # aave-proposals-v3's GSMMigration diff report has EXECUTOR
-        # Approval(owner: EXECUTOR, spender: GSM, value: A) immediately
-        # followed by Transfer(from: EXECUTOR, to: GSM, value: A) on the
-        # SAME token section -- EXECUTOR authorizing then itself sending the
-        # exact approved amount straight to the GSM. Only the Transfer (the
-        # real fund movement) counts; the Approval is dropped as
-        # infrastructure for it, not merged by dedup-key coincidence.
+    def test_transfer_then_approve_same_token_amount_and_parties_stays_two_items(self):
+        # Watched-fail against 1ab1887: a value-keyed dedup cannot tell that
+        # Transfer(O, S, A) did NOT consume an allowance, so a following
+        # Approval(owner: O, spender: S, value: A) -- proof the allowance is
+        # still live and unspent -- must never be hidden by a false merge
+        # just because it repeats the same amount/parties/token.
         gho = "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"
-        executor = "0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A"
-        gsm = "0xFeeb6FE430B7523fEF2a38327241eE7153779535"
-        text = (
-            f"#### {gho}\n\n"
-            "| index | event |\n| --- | --- |\n"
-            f"| 93 | Approval(owner: {executor}, spender: {gsm}, "
-            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
-            f"| 95 | Transfer(from: {executor}, to: {gsm}, "
-            "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
-        )
-        out = dp.parse_payload_actions(text)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["action"], "Transfer")
-        self.assertEqual(out[0]["counterparty"], executor)
-        self.assertEqual(out[0]["recipient"], gsm)
-
-    def test_approval_from_a_different_owner_than_the_transfers_sender_is_not_dropped(self):
-        # Negative control: same spender, same amount, same token, but the
-        # Approval's owner does NOT match the Transfer's `from` -- a
-        # different payer approved the same spender for the same amount as
-        # an unrelated Transfer moved funds. Both must still count.
-        gho = "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"
-        owner = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        other_sender = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        owner = "0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A"
         spender = "0xFeeb6FE430B7523fEF2a38327241eE7153779535"
         text = (
             f"#### {gho}\n\n"
             "| index | event |\n| --- | --- |\n"
-            f"| 0 | Approval(owner: {owner}, spender: {spender}, "
+            f"| 0 | Transfer(from: {owner}, to: {spender}, "
             "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
-            f"| 1 | Transfer(from: {other_sender}, to: {spender}, "
+            f"| 1 | Approval(owner: {owner}, spender: {spender}, "
             "value: 82,368,897.5839 [82368897583969000000000000, 18 decimals]) |\n"
         )
         out = dp.parse_payload_actions(text)
@@ -157,11 +131,54 @@ class ParsePayloadActionsTests(unittest.TestCase):
         actions = {a["action"] for a in out}
         self.assertEqual(actions, {"Approve", "Transfer"})
 
+    def test_approve_pull_reapprove_same_amount_stays_three_items(self):
+        # Watched-fail against 1ab1887: approve A, spender pulls A, owner
+        # re-approves A -- three real, distinct actions (the re-approval
+        # would be pointless noise only if the first approval were somehow
+        # still live, which the pull disproves) -- a value-keyed dedup
+        # reports only one of them.
+        gho = "0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f"
+        owner = "0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A"
+        spender = "0xFeeb6FE430B7523fEF2a38327241eE7153779535"
+        amount = "82,368,897.5839 [82368897583969000000000000, 18 decimals]"
+        text = (
+            f"#### {gho}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            f"| 0 | Approval(owner: {owner}, spender: {spender}, value: {amount}) |\n"
+            f"| 1 | Transfer(from: {owner}, to: {spender}, value: {amount}) |\n"
+            f"| 2 | Approval(owner: {owner}, spender: {spender}, value: {amount}) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 3)
+        actions = [a["action"] for a in out]
+        self.assertEqual(actions, ["Approve", "Transfer", "Approve"])
+
+    def test_two_equal_transfers_at_different_report_indexes_both_count(self):
+        # Watched-fail against 1ab1887: two genuinely separate Transfer
+        # events between the same parties, in the same token, for the same
+        # amount (e.g. the same batch payment made twice, at different
+        # report line indexes) are two real actions, not one repeated.
+        link = "0x6B0B234fB2f380309D47A7E9391E29E9a179395a"
+        sender = "0x1cDF8879eC8bE012bA959EB515b11008E0cb6323"
+        recipient = "0x6593Bc836466a7f4E51DBd7A8FdC2c2D51c9C8e9"
+        text = (
+            f"#### {link}\n\n"
+            "| index | event |\n| --- | --- |\n"
+            f"| 10 | Transfer(from: {sender}, to: {recipient}, "
+            "value: 80 [80000000000000000000, 18 decimals]) |\n"
+            f"| 24 | Transfer(from: {sender}, to: {recipient}, "
+            "value: 80 [80000000000000000000, 18 decimals]) |\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 2)
+
     def test_duplicate_transfer_and_balance_transfer_lines_for_the_same_move_collapse_to_one(self):
         # An aToken transfer emits both a standard Transfer event and Aave's
         # own BalanceTransfer event for the SAME underlying move -- both
-        # decode to identical amount/decimals/recipient. Without dedup this
-        # becomes two duplicate findings for one real action.
+        # decode to identical amount/decimals/recipient. BalanceTransfer is
+        # unconditionally dropped (it decodes a DIFFERENT raw integer in
+        # general -- this fixture happens to share the display value -- see
+        # the module docstring), so this stays one real action.
         text = (
             "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
             "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
@@ -173,6 +190,36 @@ class ParsePayloadActionsTests(unittest.TestCase):
         out = dp.parse_payload_actions(text)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["recipient"], "0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b")
+
+
+class CountReserveDataUpdatesTests(unittest.TestCase):
+    def test_empty_text_returns_zero(self):
+        self.assertEqual(dp.count_reserve_data_updates(""), 0)
+
+    def test_counts_every_occurrence_including_repeats(self):
+        # Unlike parse_payload_actions, this counts every raw occurrence --
+        # the same reserve updating its index twice in one execution is two
+        # real, separately-omitted events, not one.
+        line = (
+            "ReserveDataUpdated(reserve: 0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57, "
+            "liquidityRate: 0, stableBorrowRate: 0, variableBorrowRate: 0, "
+            "liquidityIndex: 1 [1000000000000000000000000000, 27 decimals], "
+            "variableBorrowIndex: 1 [1000000000000000000000000000, 27 decimals])"
+        )
+        text = f"{line}\n{line}\n"
+        self.assertEqual(dp.count_reserve_data_updates(text), 2)
+
+    def test_lines_without_a_decoded_value_are_not_counted(self):
+        text = "ReserveDataUpdated(reserve: 0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57)\n"
+        self.assertEqual(dp.count_reserve_data_updates(text), 0)
+
+    def test_other_events_are_not_counted(self):
+        text = (
+            "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 100 [100000000, 6 decimals])\n"
+        )
+        self.assertEqual(dp.count_reserve_data_updates(text), 0)
 
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures")

@@ -38,19 +38,27 @@ falls back to the generic "Transfer" shape below:
   contracts and must not supersede each other. A zero-value Approval with
   no later same-section nonzero Approval for the same pair is a real
   cancel and still counts.
-- A nonzero `Approval(owner: O, spender: S, value: A)` is dropped when a
-  LATER `Transfer(from: O, to: S, value: A)` follows in the SAME `####`
-  section (same token, same raw amount and decimals) -- O sending the just-
-  approved amount directly to S itself (a self-pull/push authorization,
-  e.g. a GSM migration approving then immediately transferring the same
-  amount to the GSM). The Approval is the authorization step for that one
-  Transfer, not a second payload action; only the Transfer (the actual fund
-  movement) counts. This is an explicit, named rule (`_is_approval_for_a_
-  following_self_transfer`) -- it is NOT a side effect of the dedup key
-  below, which deliberately also carries the sender so it can never merge
-  two events by coincidence. An Approval whose owner does not match the
-  Transfer's `from` (a different payer) is a separate action and still
-  counts, even with the same spender/amount/token.
+
+There is deliberately NO general "same amount/recipient/token" dedup:
+an Approval and a following Transfer it superficially resembles (same
+token, same amount, same spender/recipient -- e.g. an owner approving a
+spender and then itself sending that spender the identical amount, as
+in a GSM migration) are ALWAYS both kept as separate items. The events
+alone cannot tell a plain `transfer()` (the allowance A granted by the
+Approval is still live and unspent) from the spender later calling
+`transferFrom` (the allowance is consumed) -- the diff report carries
+no caller, so collapsing them on value-equality risks hiding a real,
+live allowance from the comparison. The same reasoning rules out a
+value-keyed dedup in general: `Transfer(O, S, A)` followed later by
+`Approval(O, S, A)` proves the allowance is live (the transfer did not
+consume it), and approve A / pull A / re-approve A is three real,
+distinct actions -- a dedup keyed on (raw, decimals, recipient,
+section[, sender]) would report only one of them in both cases. Across
+all 805 real committed diff reports, that value-keyed dedup never once
+removed a genuine duplicate row (same section, same report line index,
+same body) -- the three explicit rules above already cover every real
+double-emission case. Every event not excluded by one of those three
+rules is therefore its own item, in the order it appears in the report.
 """
 import re
 
@@ -171,42 +179,6 @@ def _is_superseded_zero_approval(
     return False
 
 
-def _is_approval_for_a_following_self_transfer(
-    approval_line: str, raw: str, decimals: str, lines: list, idx: int, sections: list
-) -> bool:
-    """True for a nonzero Approval(owner: O, spender: S, value: A) followed,
-    in the SAME `####` section (the same token contract), by a
-    Transfer(from: O, to: S, value: A) with the identical raw amount and
-    decimals -- O authorizing and then itself immediately sending the
-    approved amount directly to S. The Approval is infrastructure for that
-    one Transfer, not a separate action; only the Transfer counts. An
-    Approval whose owner differs from that Transfer's `from` (a different
-    payer approved the same spender for the same amount) is unrelated and
-    must not be dropped."""
-    if raw == "0":
-        return False
-    owner, spender = _approval_owner_spender(approval_line)
-    if not owner or not spender:
-        return False
-    section = sections[idx]
-    for later_idx in range(idx + 1, len(lines)):
-        if sections[later_idx] != section:
-            continue
-        later_line = lines[later_idx]
-        if _line_kind(later_line) != "transfer":
-            continue
-        later_m = DECODED_VALUE_RE.search(later_line)
-        if not later_m or later_m.group("raw") != raw or later_m.group("decimals") != decimals:
-            continue
-        later_from = FROM_ADDRESS_RE.search(later_line)
-        later_to = TO_ADDRESS_RE.search(later_line)
-        if not later_from or not later_to:
-            continue
-        if later_from.group(1).lower() == owner and later_to.group(1).lower() == spender:
-            return True
-    return False
-
-
 def _is_interest_accrual(transfer_line: str, transfer_raw: str, lines: list, idx: int) -> bool:
     """True when a from-zero Transfer is paired with a following Mint whose
     balanceIncrease matches the Transfer's raw value and whose onBehalfOf is
@@ -234,29 +206,19 @@ def parse_payload_actions(diff_report_text: str):
     """Returns a list of {"action", "asset", "amount", "decimals",
     "recipient", "network", "raw_line"} extracted from decoded value lines.
 
-    Deduped on (raw, decimals, recipient, section, sender) -- the exact
-    underlying integer, not the rounded human-readable display amount (two
-    genuinely different raw amounts that happen to round to the same
-    displayed value must not collapse into one finding); the emitting
-    contract's own address (`section`, from the nearest preceding
-    `#### 0x...` header), without which two distinct payments of the same
-    raw amount to the same recipient in DIFFERENT tokens (e.g. 100,000 USDC
-    and 100,000 USDT, both 6 decimals, from one sender to one recipient)
-    would wrongly collapse into one finding, since token identity lives
-    only in which contract emitted the Transfer/Approval, not in the
-    event's own fields; AND the payer (`owner` for an Approval, `from` for
-    a Transfer, `user` for anything else that carries it, e.g. Supply) --
-    without it, two distinct payments of the same raw amount in the same
-    token to the same recipient from DIFFERENT senders would also wrongly
-    collapse into one finding. The one case that used to merge by
-    coincidence through this key alone -- an Approval and the Transfer it
-    authorises -- is now handled explicitly, before this key is even
-    built: see `_is_approval_for_a_following_self_transfer`.
+    NOT deduped on value (raw/decimals/recipient/token/sender): the events
+    alone cannot tell a plain `transfer()` from the `transferFrom` it might
+    authorise, so two lines that merely happen to carry the same amount are
+    never assumed to be the same action -- see the module docstring for why
+    (a live allowance must never be hidden by a false merge) and the real-
+    data check (0 genuine duplicates removed across 805 diffs) backing it.
+    Every event survives as its own item except the three explicitly-named
+    exclusions above (BalanceTransfer, interest-accrual Mint pairing,
+    superseded zero-approval), in the order it appears in the report.
     """
     if not diff_report_text or not diff_report_text.strip():
         return []
     actions = []
-    seen = set()
     lines = diff_report_text.splitlines()
     sections = _line_sections(lines)
     for idx, line in enumerate(lines):
@@ -272,10 +234,6 @@ def parse_payload_actions(diff_report_text: str):
             line, m.group("raw"), lines, idx, sections
         ):
             continue
-        if kind == "approval" and _is_approval_for_a_following_self_transfer(
-            line, m.group("raw"), m.group("decimals"), lines, idx, sections
-        ):
-            continue
         recipient = _extract_recipient(line, kind)
         event_name_m = EVENT_NAME_RE.search(line)
         inline_symbol_m = INLINE_SYMBOL_RE.search(line)
@@ -287,15 +245,6 @@ def parse_payload_actions(diff_report_text: str):
             counterparty_m = None
         on_behalf_of_m = ON_BEHALF_OF_RE.search(line)
         user_m = USER_ADDRESS_RE.search(line)
-        sender = None
-        if counterparty_m:
-            sender = counterparty_m.group(1).lower()
-        elif user_m:
-            sender = user_m.group(1).lower()
-        key = (m.group("raw"), m.group("decimals"), recipient, sections[idx], sender)
-        if key in seen:
-            continue
-        seen.add(key)
         actions.append(
             {
                 "action": "Approve" if kind == "approval" else "Transfer",
@@ -323,11 +272,13 @@ def parse_payload_actions(diff_report_text: str):
 
 def count_reserve_data_updates(diff_report_text: str) -> int:
     """Counts every `ReserveDataUpdated(...)` line with a decoded value in
-    the RAW diff report text -- deliberately not deduped like
-    parse_payload_actions: a reserve can legitimately emit this event more
+    the RAW diff report text. build_readable_findings excludes every
+    `ReserveDataUpdated` item parse_payload_actions returns (it's protocol
+    accounting, never a payment) and reports this count instead, as a
+    single summary note: a reserve can legitimately emit this event more
     than once in one execution (e.g. once before and once after a Supply
-    changes the rate), and each occurrence is real accounting activity that
-    was skipped, not a duplicate to collapse away."""
+    changes the rate), and each occurrence is real accounting activity, not
+    a duplicate."""
     if not diff_report_text:
         return 0
     count = 0
