@@ -7,11 +7,34 @@ against the diff report's deterministically parsed payload actions
 import json
 import sys
 
+import address_book
 import diff_parser
+import readable_actions
 import spec_compare
 from sanitize import sanitize_markdown
 
 SCALE_OUTPUT_CAP = 4000
+# A readable finding line now always carries full, unshortened addresses
+# (address_book.describe_address) -- 300 chars was tight enough to cut a
+# seed summary mid-word ("... (raw, d"). 800 comfortably fits the longest
+# real line across every committed fixture (the PR #231 seed summary, the
+# longest, is well under 400) with headroom for a busier proposal, while
+# still guarding against a pathological/adversarial input.
+FINDING_LINE_CAP = 800
+
+
+def _truncate_at_word_boundary(text: str, max_len: int) -> str:
+    """Cuts `text` to at most `max_len` chars at the last whitespace
+    boundary and appends "…", instead of slicing mid-word. `text` is
+    assumed already <= max_len is not required -- this both shortens and
+    cleans up a hard cut a prior step may have made."""
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 1]
+    boundary = cut.rfind(" ")
+    if boundary > 0:
+        cut = cut[:boundary]
+    return cut.rstrip() + "…"
 
 
 def _parse_forum_json(ai_out_text: str):
@@ -59,29 +82,44 @@ def render_scale_alert(scale_check_output: str) -> str:
     return "> [!CAUTION]\n" + "\n".join(lines)
 
 
-def render_comparison_alerts(comparison: dict) -> str:
+def render_comparison_alerts(comparison: dict, readable_findings: list, omitted_index_updates: int = 0) -> str:
+    """`readable_findings` is required (not `None`-defaulted): a caller
+    that forgets to build it must fail loudly, not silently print "No
+    mismatches found" while `comparison["unexplained"]` is nonempty."""
     blocks = []
-    if comparison["unexplained"]:
+    if readable_findings:
         lines = []
-        for p in comparison["unexplained"]:
-            line = f"> 🔴 In payload but not in the forum post: amount `{p.get('amount')}`"
-            if p.get("recipient"):
-                line += f", recipient `{p.get('recipient')}`"
-            lines.append(sanitize_markdown(line, 300))
-        blocks.append("> [!CAUTION]\n" + "\n".join(lines))
+        for finding in readable_findings:
+            # sanitize BEFORE the word-boundary cut, uncapped (its own
+            # default max_len is a generous 20000) -- if it cut to
+            # FINDING_LINE_CAP itself first, the result would already sit
+            # exactly at the cap and look "not over it" to the boundary
+            # cut below, silently keeping the mid-word truncation.
+            raw = f"> 🟠 In payload but not in the forum post: {finding['line']}"
+            lines.append(_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP))
+            for sub in finding.get("sub_lines", []):
+                sub_raw = f">   - {sub}"
+                lines.append(_truncate_at_word_boundary(sanitize_markdown(sub_raw), FINDING_LINE_CAP))
+        blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if comparison["warnings"]:
         lines = [
             sanitize_markdown(f"> 🟠 Mismatch: {w['label']}: {w['detail']}", 300)
             for w in comparison["warnings"]
         ]
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
-    if not comparison["unexplained"] and not comparison["warnings"]:
+    if not readable_findings and not comparison["warnings"]:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
     if comparison.get("notes"):
         lines = [
             sanitize_markdown(f"> {n['label']}: {n['detail']}", 300) for n in comparison["notes"]
         ]
         blocks.append("> [!NOTE]\n" + "\n".join(lines))
+    if omitted_index_updates:
+        word = "update" if omitted_index_updates == 1 else "updates"
+        blocks.append(
+            f"> [!NOTE]\n> {omitted_index_updates} reserve index {word} "
+            "(accounting, not payments) omitted from the comparison."
+        )
     if comparison["forum_only_count"] > 0:
         blocks.append(
             f"<details><summary>{comparison['forum_only_count']} other forum items are not in this "
@@ -98,6 +136,7 @@ def build(
     scale_out_text: str,
     fork_test_status: str = "",
     pr_description_unresolved: list = None,
+    address_book_root: str = None,
 ) -> str:
     forum_items, error = _parse_forum_json(ai_out_text)
     parts = ["**Forum-vs-payload spec check (advisory, not a review or approval)**", ""]
@@ -131,7 +170,20 @@ def build(
         return "\n".join(parts)
 
     comparison = spec_compare.compare(forum_items, payload_items)
-    parts.append(render_comparison_alerts(comparison))
+    label_map, symbol_map = address_book.build_maps(diff_report_text)
+    new_reserve_symbols = address_book.new_reserve_symbols(diff_report_text)
+    # A missing/empty address_book_root degrades to {} (no book) rather than
+    # raising -- callers that don't pass one at all get today's behaviour.
+    solidity_labels = address_book.load_solidity_labels(address_book_root)
+    chain = address_book.infer_chain(diff_report_text)
+    readable_findings = readable_actions.build_readable_findings(
+        comparison["unexplained"], label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
+    )
+    # Counted from the RAW diff report, not the deduped `payload_items` --
+    # the same reserve index can legitimately update more than once in one
+    # execution, and each occurrence was real, omitted activity.
+    omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
+    parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates))
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
     return "\n".join(parts)
@@ -144,6 +196,9 @@ def main():
     fork_status_path = sys.argv[5] if len(sys.argv) > 5 else None
     pr_body_path = sys.argv[6] if len(sys.argv) > 6 else None
     pr_template_path = sys.argv[7] if len(sys.argv) > 7 else None
+    # Optional and additive: an absent arg (old callers) degrades to no
+    # Solidity address-book source, never an error.
+    address_book_root = sys.argv[8] if len(sys.argv) > 8 else None
     with open(ai_out_path, encoding="utf-8") as f:
         ai_out_text = f.read()
     try:
@@ -179,7 +234,16 @@ def main():
             pr_template_text = ""
         pr_description_unresolved = upstream_pr.find_unresolved_template_items(pr_body_text, pr_template_text)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(build(ai_out_text, diff_report_text, scale_out_text, fork_test_status, pr_description_unresolved))
+        f.write(
+            build(
+                ai_out_text,
+                diff_report_text,
+                scale_out_text,
+                fork_test_status,
+                pr_description_unresolved,
+                address_book_root,
+            )
+        )
 
 
 if __name__ == "__main__":

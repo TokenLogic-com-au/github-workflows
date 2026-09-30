@@ -80,7 +80,11 @@ else
 fi
 
 echo "== rendering ==" >&2
-python3 render_advisory_comment.py "$OUT_DIR/ai-out.md" "$DIFF_FILE" "$OUT_DIR/scale-out.txt" "$OUT_DIR/advisory-body.md"
+# 8th arg: the address-book root, like CI (proposal-checks.yml) -- degrades
+# to no Solidity naming source if the submodule isn't checked out here.
+BOOK_ROOT="$REPO_DIR/lib/aave-helpers/lib/aave-address-book"
+[ -d "$BOOK_ROOT" ] || BOOK_ROOT=""
+python3 render_advisory_comment.py "$OUT_DIR/ai-out.md" "$DIFF_FILE" "$OUT_DIR/scale-out.txt" "$OUT_DIR/advisory-body.md" "" "" "" "$BOOK_ROOT"
 
 echo "" >&2
 echo "Rendered advisory body: $OUT_DIR/advisory-body.md" >&2

@@ -41,6 +41,8 @@ falls back to the generic "Transfer" shape below:
 """
 import re
 
+from address_book import INLINE_SYMBOL_RE
+
 DECODED_VALUE_RE = re.compile(
     r"(?P<human>[\d,]+(?:\.\d+)?)\s*\[\s*(?P<raw>\d+)\s*,\s*(?P<decimals>\d+)\s*decimals\s*\]"
 )
@@ -51,11 +53,17 @@ ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 # that explicitly follows a "to" label; fall back to the first address in
 # the line for shapes that have no "from"/"to" labels at all.
 TO_ADDRESS_RE = re.compile(r"\bto:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
+FROM_ADDRESS_RE = re.compile(r"\bfrom:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
 SPENDER_ADDRESS_RE = re.compile(r"\bspender:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
 OWNER_ADDRESS_RE = re.compile(r"\bowner:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
 FROM_ZERO_RE = re.compile(r"\bfrom:?\s+0x0{40}\b", re.IGNORECASE)
 ON_BEHALF_OF_RE = re.compile(r"\bonBehalfOf:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
+USER_ADDRESS_RE = re.compile(r"\buser:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
 BALANCE_INCREASE_RE = re.compile(r"\bbalanceIncrease:?\s*([\d,]+)", re.IGNORECASE)
+# The event name a diff-report line decodes, e.g. "Transfer(" -> "Transfer",
+# "BorrowCapChanged(" -> "BorrowCapChanged" -- used only for human-readable
+# rendering (readable_actions.py), never for the matching/dedup logic above.
+EVENT_NAME_RE = re.compile(r"\b([A-Z][A-Za-z0-9]*)\(")
 # Each diff-report event-log section is headed "#### 0x<contract address>
 # (labels...)" -- everything until the next such header is emitted by that
 # one contract.
@@ -206,6 +214,16 @@ def parse_payload_actions(diff_report_text: str):
         if key in seen:
             continue
         seen.add(key)
+        event_name_m = EVENT_NAME_RE.search(line)
+        inline_symbol_m = INLINE_SYMBOL_RE.search(line)
+        if kind == "approval":
+            counterparty_m = OWNER_ADDRESS_RE.search(line)
+        elif kind == "transfer":
+            counterparty_m = FROM_ADDRESS_RE.search(line)
+        else:
+            counterparty_m = None
+        on_behalf_of_m = ON_BEHALF_OF_RE.search(line)
+        user_m = USER_ADDRESS_RE.search(line)
         actions.append(
             {
                 "action": "Approve" if kind == "approval" else "Transfer",
@@ -215,6 +233,36 @@ def parse_payload_actions(diff_report_text: str):
                 "recipient": recipient,
                 "network": None,
                 "raw_line": line.strip(),
+                "event_name": event_name_m.group(1) if event_name_m else None,
+                "section": sections[idx],
+                "counterparty": counterparty_m.group(1) if counterparty_m else None,
+                "on_behalf_of": on_behalf_of_m.group(1) if on_behalf_of_m else None,
+                # The caller/payer on a Supply line, e.g. `user: 0x...` --
+                # distinct from `onBehalfOf` (the beneficiary), needed to
+                # verify a listing-seed's Approval/Transfer actually came
+                # from the same payer as the Supply, not just any nonzero
+                # Approval sitting in the same token section.
+                "user": user_m.group(1) if user_m else None,
+                "inline_symbol": inline_symbol_m.group(2).strip() if inline_symbol_m else None,
             }
         )
     return actions
+
+
+def count_reserve_data_updates(diff_report_text: str) -> int:
+    """Counts every `ReserveDataUpdated(...)` line with a decoded value in
+    the RAW diff report text -- deliberately not deduped like
+    parse_payload_actions: a reserve can legitimately emit this event more
+    than once in one execution (e.g. once before and once after a Supply
+    changes the rate), and each occurrence is real accounting activity that
+    was skipped, not a duplicate to collapse away."""
+    if not diff_report_text:
+        return 0
+    count = 0
+    for line in diff_report_text.splitlines():
+        if not DECODED_VALUE_RE.search(line):
+            continue
+        event_name_m = EVENT_NAME_RE.search(line)
+        if event_name_m and event_name_m.group(1) == "ReserveDataUpdated":
+            count += 1
+    return count

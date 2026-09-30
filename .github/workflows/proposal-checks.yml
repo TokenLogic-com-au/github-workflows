@@ -500,7 +500,16 @@ jobs:
           else
             : > pr-template.txt
           fi
-          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt
+          # Optional 8th arg: the checked-out aave-address-book root (this
+          # job checks out the proposal repo with `submodules: recursive`,
+          # same as the address-book job above) -- a second naming source
+          # for a party the diff report itself never labelled (no event/
+          # storage section of its own, e.g. an approval spender or a plain
+          # constant like DUST_BIN). A missing/renamed path degrades to
+          # today's behaviour rather than failing the step.
+          book_root="lib/aave-helpers/lib/aave-address-book"
+          [ -d "$book_root" ] || book_root=""
+          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt "$book_root"
           if [ "$DIFF_SOURCE" = "committed" ]; then
             diff_note="_Diff report: committed by the author._"
           else
