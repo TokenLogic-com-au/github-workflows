@@ -20,6 +20,9 @@ def _read_fixture(name):
         return f.read()
 
 
+ADDRESS_BOOK_SLICE = os.path.join(FIXTURES_DIR, "address_book_slice")
+
+
 class BuildTests(unittest.TestCase):
     def test_invalid_json_reports_extraction_failure_not_a_crash(self):
         out = rac.build("not json at all", CLEAN_DIFF, "no scale-bound flags")
@@ -130,6 +133,25 @@ class ReadableFixtureTests(unittest.TestCase):
         self.assertNotIn("[!CAUTION]", out)
         # the old renderer's raw shape must be gone
         self.assertNotIn("amount `100`, recipient `0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef`", out)
+        # ReserveDataUpdated is accounting, not a WARNING finding
+        self.assertNotIn("rate/index update", out)
+        self.assertIn("1 reserve index update (accounting, not payments) omitted from the comparison.", out)
+
+    def test_pr231_listing_with_address_book_labels_dust_bin(self):
+        diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        out = rac.build(
+            json.dumps({"forum": []}), diff, "no scale-bound flags", "", [], ADDRESS_BOOK_SLICE
+        )
+        self.assertIn("AaveV3Monad.DUST_BIN", out)
+        self.assertNotIn("0xf23C", out)
+
+    def test_missing_address_book_root_degrades_to_short_address(self):
+        diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        out = rac.build(
+            json.dumps({"forum": []}), diff, "no scale-bound flags", "", [], "/no/such/path"
+        )
+        self.assertIn("0xf23C", out)
+        self.assertNotIn("AaveV3Monad.DUST_BIN", out)
 
     def test_funding_update_labels_the_collector_and_atoken_not_raw_addresses(self):
         diff = _read_fixture("ethereum_february2026_funding_update_diff.md")
@@ -139,6 +161,8 @@ class ReadableFixtureTests(unittest.TestCase):
         self.assertIn("aWETH", out)
         self.assertNotIn("Listing seed", out)
         self.assertNotIn("0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c", out)
+        self.assertNotIn("rate/index update", out)
+        self.assertIn("reserve index update", out)
 
     def test_umbrella_renewal_fixture_has_no_decoded_events_and_is_reported_plainly(self):
         # This proposal's diff report is storage-only ("## Raw diff"), so

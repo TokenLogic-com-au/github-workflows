@@ -15,11 +15,21 @@ Two maps come out:
 - `symbol_map`: address -> the ERC20 symbol for WHAT token an address is
   (used to describe the token an amount is denominated in).
 
-`describe_address` picks a name for an address from label_map first (a role
-is more informative than a bare symbol for describing a party), falling
-back to symbol_map, then to a short `0x1234…abcd` form.
+The diff report only labels a contract that gets its own `####`/`###`
+section (something it emitted an event on, or that changed storage) -- a
+plain recipient with no state change of its own (a Safe, a DUST_BIN
+constant, an approval spender) never gets one. `load_solidity_labels` reads
+the actual aave-address-book `.sol` sources (checked out alongside the
+proposal repo as a submodule) for a second source of `Library.CONSTANT`
+names to fill exactly that gap.
+
+`describe_address` picks a name in this order: diff-report label_map (most
+specific to this execution) > diff-report symbol_map > the Solidity address
+book (optional, degrades silently when absent) > a short `0x1234…abcd` form.
 """
+import os
 import re
+from collections import Counter, defaultdict
 
 # Event-log and raw-storage section headers: "#### 0xADDR (label1, label2)"
 # or "### 0xaddr (label)" -- raw storage headers are lowercase, event-log
@@ -149,7 +159,94 @@ def new_reserve_symbols(diff_report_text: str):
     return symbols
 
 
-def describe_address(addr, label_map, symbol_map):
+_LIBRARY_RE = re.compile(r"\blibrary\s+(\w+)\s*\{")
+# A constant declaration: an optional interface-typed wrapper call around
+# the address, e.g. `IPool internal constant POOL = IPool(0x...);` or the
+# bare `address internal constant DUST_BIN = 0x...;` -- and either shape can
+# wrap onto a second line between `=` and the address (aave-address-book's
+# generator does this whenever the declaration is long), so this matches
+# across newlines.
+_SOL_CONST_RE = re.compile(
+    r"\b(?:address|[A-Z]\w*)\s+internal\s+constant\s+(\w+)\s*=\s*"
+    r"(?:[A-Z]\w*\(\s*)?(0x[0-9a-fA-F]{40})\s*\)?\s*;",
+    re.DOTALL,
+)
+# Namespace-chain suffix, e.g. "AaveV3Monad" -> "Monad", "GovernanceV3Ethereum"
+# -> "Ethereum" -- used to prefer a book entry from the payload's own chain
+# when one address has book entries on several chains.
+_CHAIN_SUFFIX_RE = re.compile(r"\b(?:AaveV[234]|GovernanceV3|Umbrella|Gho|Misc)([A-Z][A-Za-z0-9]*)\b")
+
+
+def _parse_solidity_libraries(text: str):
+    """Yields (library_name, constant_name, address) for every top-level
+    `library NAME { ... }` block in one .sol file's source text."""
+    for m in _LIBRARY_RE.finditer(text):
+        library_name = m.group(1)
+        start = m.end()
+        depth = 1
+        i = start
+        length = len(text)
+        while i < length and depth > 0:
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            i += 1
+        body = text[start:i]
+        for const_m in _SOL_CONST_RE.finditer(body):
+            yield library_name, const_m.group(1), const_m.group(2)
+
+
+def load_solidity_labels(address_book_root: str):
+    """Returns {address_lower: [(library, constant_name), ...]} parsed from
+    every `.sol` file under `address_book_root` (the aave-address-book
+    checkout). Returns {} for a missing/empty root -- the caller degrades to
+    the diff-report-only labels, it never raises."""
+    labels = defaultdict(list)
+    if not address_book_root or not os.path.isdir(address_book_root):
+        return labels
+    for dirpath, _dirnames, filenames in os.walk(address_book_root):
+        for filename in filenames:
+            if not filename.endswith(".sol"):
+                continue
+            path = os.path.join(dirpath, filename)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            for library_name, const_name, addr in _parse_solidity_libraries(text):
+                labels[addr.lower()].append((library_name, const_name))
+    return labels
+
+
+def infer_chain(diff_report_text: str):
+    """The most common `AaveVx<Chain>`/`GovernanceV3<Chain>`/... namespace
+    suffix appearing in the diff report's own labels -- a best-effort guess
+    at which chain this payload runs on, used only to prefer a same-chain
+    address-book entry when one address has several."""
+    if not diff_report_text:
+        return None
+    counts = Counter(_CHAIN_SUFFIX_RE.findall(diff_report_text))
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+
+def _describe_from_solidity_book(addr, solidity_labels, chain):
+    entries = solidity_labels.get(addr.lower()) if solidity_labels else None
+    if not entries:
+        return None
+    if chain:
+        same_chain = [e for e in entries if e[0].endswith(chain)]
+        if same_chain:
+            entries = same_chain
+    library_name, const_name = sorted(entries)[0]
+    return f"{library_name}.{const_name}"
+
+
+def describe_address(addr, label_map, symbol_map, solidity_labels=None, chain=None):
     if not addr:
         return "unknown address"
     key = addr.lower()
@@ -157,4 +254,7 @@ def describe_address(addr, label_map, symbol_map):
         return label_map[key]
     if key in symbol_map:
         return symbol_map[key]
+    from_book = _describe_from_solidity_book(addr, solidity_labels, chain)
+    if from_book:
+        return from_book
     return f"{addr[:6]}…{addr[-4:]}"

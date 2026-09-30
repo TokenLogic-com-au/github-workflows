@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import address_book as ab
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures")
+ADDRESS_BOOK_SLICE = os.path.join(FIXTURES_DIR, "address_book_slice")
 
 
 def _read_fixture(name):
@@ -87,6 +88,125 @@ class BuildMapsTests(unittest.TestCase):
         self.assertEqual(label_map["0x69a5f9ad4f96ebf0a0c792dd42a01cc5c0102fef"], "POOL")
         self.assertEqual(
             symbol_map["0x8f8d143f1fce0a57a6e80d8df7f7288703b2eb7e"], "aMonPT_AUSD_17DEC2026"
+        )
+
+
+class LoadSolidityLabelsTests(unittest.TestCase):
+    # Fixture slice: test_fixtures/address_book_slice/src/{AaveV3Monad,
+    # MiscEthereum}.sol, copied verbatim from the real, read-only
+    # aave-address-book checkout at
+    # cloned_repos/aave-proposals-v3/lib/aave-helpers/lib/aave-address-book
+    # -- unit tests never depend on that path.
+
+    def test_missing_root_returns_empty_and_does_not_raise(self):
+        self.assertEqual(ab.load_solidity_labels(""), {})
+        self.assertEqual(ab.load_solidity_labels("/no/such/dir"), {})
+        self.assertEqual(ab.load_solidity_labels(None), {})
+
+    def test_bare_address_constant_is_parsed(self):
+        labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        self.assertIn(
+            ("AaveV3Monad", "DUST_BIN"),
+            labels["0xf23c65c8c92e42e990786523744db9d5cdcf6cbe"],
+        )
+
+    def test_typed_wrapper_constant_on_one_line_is_parsed(self):
+        # `IPool internal constant POOL = IPool(0x...);` all on one line.
+        labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        self.assertIn(
+            ("AaveV3Monad", "POOL"),
+            labels["0x69a5f9ad4f96ebf0a0c792dd42a01cc5c0102fef"],
+        )
+
+    def test_typed_wrapper_constant_wrapped_across_two_lines_is_parsed(self):
+        # `IPoolConfigurator internal constant POOL_CONFIGURATOR =\n
+        #     IPoolConfigurator(0x...);`
+        labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        self.assertIn(
+            ("AaveV3Monad", "POOL_CONFIGURATOR"),
+            labels["0xc7a386da9cb528aa86fed862a7bf33d10aa8455b"],
+        )
+
+    def test_bare_address_constant_wrapped_across_two_lines_is_parsed(self):
+        # MiscEthereum's TOKENLOGIC_FUNDING_RECEIVER: `address internal
+        # constant NAME =\n    0x...;` with no type wrapper at all.
+        labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        self.assertIn(
+            ("MiscEthereum", "TOKENLOGIC_FUNDING_RECEIVER"),
+            labels["0xaa088dff3dcf619664094945028d44e779f19894"],
+        )
+
+    def test_an_address_not_in_the_book_is_absent(self):
+        labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        self.assertNotIn("0xac140648435d03f784879cd789130f22ef588fcd", labels)
+
+
+class InferChainTests(unittest.TestCase):
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(ab.infer_chain(""))
+
+    def test_most_common_chain_suffix_wins(self):
+        text = (
+            "#### 0x1 (AaveV3Monad.POOL)\n"
+            "#### 0x2 (GovernanceV3Monad.EXECUTOR_LVL_1)\n"
+            "#### 0x3 (AaveV3Ethereum.POOL)\n"
+        )
+        self.assertEqual(ab.infer_chain(text), "Monad")
+
+
+class DescribeAddressWithSolidityBookTests(unittest.TestCase):
+    def test_diff_report_label_wins_over_solidity_book(self):
+        solidity_labels = {"0xaddr": [("SomeLib", "SOME_NAME")]}
+        label_map = {"0xaddr": "POOL"}
+        self.assertEqual(
+            ab.describe_address("0xADDR", label_map, {}, solidity_labels, None), "POOL"
+        )
+
+    def test_solidity_book_used_when_diff_report_has_no_label(self):
+        solidity_labels = {"0xaddr": [("AaveV3Monad", "DUST_BIN")]}
+        self.assertEqual(
+            ab.describe_address("0xADDR", {}, {}, solidity_labels, None),
+            "AaveV3Monad.DUST_BIN",
+        )
+
+    def test_same_chain_entry_preferred_when_address_has_several(self):
+        solidity_labels = {
+            "0xaddr": [("MiscEthereum", "AFC_SAFE"), ("MiscMonad", "AFC_SAFE")]
+        }
+        self.assertEqual(
+            ab.describe_address("0xADDR", {}, {}, solidity_labels, "Ethereum"),
+            "MiscEthereum.AFC_SAFE",
+        )
+        self.assertEqual(
+            ab.describe_address("0xADDR", {}, {}, solidity_labels, "Monad"),
+            "MiscMonad.AFC_SAFE",
+        )
+
+    def test_falls_back_to_short_address_when_book_has_nothing_either(self):
+        self.assertEqual(
+            ab.describe_address("0xac140648435d03f784879cd789130F22Ef588Fcd", {}, {}, {}, "Ethereum"),
+            "0xac14…8Fcd",
+        )
+
+    def test_missing_solidity_labels_degrades_silently(self):
+        # No book passed at all -- must behave exactly like before this
+        # source existed, not raise.
+        self.assertEqual(
+            ab.describe_address("0xac140648435d03f784879cd789130F22Ef588Fcd", {}, {}),
+            "0xac14…8Fcd",
+        )
+
+    def test_full_slice_resolves_dust_bin_on_the_pt_ausd_listing_fixture(self):
+        diff_text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        label_map, symbol_map = ab.build_maps(diff_text)
+        solidity_labels = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+        chain = ab.infer_chain(diff_text)
+        self.assertEqual(chain, "Monad")
+        self.assertEqual(
+            ab.describe_address(
+                "0xf23C65c8C92E42e990786523744Db9d5cdcF6cbE", label_map, symbol_map, solidity_labels, chain
+            ),
+            "AaveV3Monad.DUST_BIN",
         )
 
 

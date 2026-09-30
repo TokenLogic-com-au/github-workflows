@@ -145,15 +145,17 @@ class ListingSeedGroupingTests(unittest.TestCase):
         items = dp.parse_payload_actions(text)
         label_map, symbol_map = ab.build_maps(text)
         new_reserves = ab.new_reserve_symbols(text)
-        findings = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
+        findings, omitted = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
 
         self.assertEqual(len(items), 6)
         seed = next(f for f in findings if f["sub_lines"])
         self.assertTrue(seed["line"].startswith("Listing seed for PT-AUSD-17DEC2026:"))
         self.assertEqual(len(seed["sub_lines"]), 4)
-        # every item is covered exactly once: 4 grouped + 2 standalone
-        self.assertEqual(len(findings), 3)
-        self.assertEqual(sum(len(f["sub_lines"]) or 1 for f in findings), 6)
+        # every item is covered exactly once: 4 grouped + 1 approval reset +
+        # 1 ReserveDataUpdated, omitted (accounting, not a finding)
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(omitted, 1)
+        self.assertEqual(sum(len(f["sub_lines"]) or 1 for f in findings) + omitted, 6)
 
     def test_existing_reserve_supply_flow_is_not_mislabelled_as_a_listing(self):
         # Same approve->supply->mint shape as a listing seed, but on an
@@ -164,7 +166,7 @@ class ListingSeedGroupingTests(unittest.TestCase):
         label_map, symbol_map = ab.build_maps(text)
         new_reserves = ab.new_reserve_symbols(text)
         self.assertEqual(new_reserves, set())
-        findings = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
+        findings, _omitted = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
         seed = next(f for f in findings if f["sub_lines"])
         self.assertTrue(seed["line"].startswith("Supply flow for WETH:"))
         self.assertNotIn("Listing seed", seed["line"])
@@ -182,9 +184,10 @@ class ListingSeedGroupingTests(unittest.TestCase):
                 "on_behalf_of": None,
             }
         ]
-        findings = ra.build_readable_findings(items, {}, {})
+        findings, omitted = ra.build_readable_findings(items, {}, {})
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["sub_lines"], [])
+        self.assertEqual(omitted, 0)
 
 
 if __name__ == "__main__":
