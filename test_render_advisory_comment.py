@@ -158,6 +158,29 @@ class ReadableFixtureTests(unittest.TestCase):
         self.assertIn("0xa9d0EAFF48cE1DF468f9eAeb7e628c413343F6A2", out)
         self.assertIn("0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef", out)
 
+    def test_pr231_seed_summary_with_address_book_renders_complete_not_cut_mid_word(self):
+        # Watched-fail: with the old 300-char cap, full addresses push this
+        # line past the limit and sanitize_markdown's plain slice cuts it
+        # mid-word ("... (raw, d"). It must now render complete.
+        diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        out = rac.build(
+            json.dumps({"forum": []}), diff, "no scale-bound flags", "", [], ADDRESS_BOOK_SLICE
+        )
+        seed_lines = [line for line in out.splitlines() if "Listing seed" in line]
+        self.assertEqual(len(seed_lines), 1)
+        self.assertTrue(seed_lines[0].endswith("(raw, decimals unknown)"))
+        self.assertNotIn("(raw, d", seed_lines[0][:-len("(raw, decimals unknown)")])
+
+    def test_over_cap_line_is_cut_at_a_word_boundary_with_ellipsis(self):
+        comparison = {"unexplained": [1], "warnings": [], "notes": [], "forum_only_count": 0}
+        long_word_line = "word " * 200  # far over FINDING_LINE_CAP, all spaces -- easy boundary
+        readable_findings = [{"line": long_word_line, "sub_lines": []}]
+        out = rac.render_comparison_alerts(comparison, readable_findings)
+        finding_line = next(line for line in out.splitlines() if "In payload but not in the forum post" in line)
+        self.assertTrue(finding_line.endswith("…"))
+        self.assertLessEqual(len(finding_line), rac.FINDING_LINE_CAP)
+        self.assertNotIn("wor…", finding_line)  # never a mid-word cut
+
     def test_pr231_listing_with_address_book_labels_dust_bin_without_dropping_its_address(self):
         diff = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
         out = rac.build(

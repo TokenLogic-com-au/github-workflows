@@ -14,6 +14,27 @@ import spec_compare
 from sanitize import sanitize_markdown
 
 SCALE_OUTPUT_CAP = 4000
+# A readable finding line now always carries full, unshortened addresses
+# (address_book.describe_address) -- 300 chars was tight enough to cut a
+# seed summary mid-word ("... (raw, d"). 800 comfortably fits the longest
+# real line across every committed fixture (the PR #231 seed summary, the
+# longest, is well under 400) with headroom for a busier proposal, while
+# still guarding against a pathological/adversarial input.
+FINDING_LINE_CAP = 800
+
+
+def _truncate_at_word_boundary(text: str, max_len: int) -> str:
+    """Cuts `text` to at most `max_len` chars at the last whitespace
+    boundary and appends "…", instead of slicing mid-word. `text` is
+    assumed already <= max_len is not required -- this both shortens and
+    cleans up a hard cut a prior step may have made."""
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 1]
+    boundary = cut.rfind(" ")
+    if boundary > 0:
+        cut = cut[:boundary]
+    return cut.rstrip() + "…"
 
 
 def _parse_forum_json(ai_out_text: str):
@@ -69,9 +90,16 @@ def render_comparison_alerts(comparison: dict, readable_findings: list, omitted_
     if readable_findings:
         lines = []
         for finding in readable_findings:
-            lines.append(sanitize_markdown(f"> 🟠 In payload but not in the forum post: {finding['line']}", 300))
+            # sanitize BEFORE the word-boundary cut, uncapped (its own
+            # default max_len is a generous 20000) -- if it cut to
+            # FINDING_LINE_CAP itself first, the result would already sit
+            # exactly at the cap and look "not over it" to the boundary
+            # cut below, silently keeping the mid-word truncation.
+            raw = f"> 🟠 In payload but not in the forum post: {finding['line']}"
+            lines.append(_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP))
             for sub in finding.get("sub_lines", []):
-                lines.append(sanitize_markdown(f">   - {sub}", 300))
+                sub_raw = f">   - {sub}"
+                lines.append(_truncate_at_word_boundary(sanitize_markdown(sub_raw), FINDING_LINE_CAP))
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if comparison["warnings"]:
         lines = [
