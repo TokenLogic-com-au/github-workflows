@@ -289,6 +289,13 @@ class ErrorPathTests(unittest.TestCase):
         self.assertNotIn("OVERFLOW-MARKER-BEYOND-CAP", message)
 
 
+class TimeoutTests(unittest.TestCase):
+    def test_urlopen_timeout_exits_with_clear_message(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _live({"ANTHROPIC_API_KEY": "test-key"}, None, urlopen_side_effect=TimeoutError())
+        self.assertEqual(str(ctx.exception), "AI API timed out after 120s")
+
+
 class BuildRequestBodyTests(unittest.TestCase):
     def tearDown(self):
         importlib.reload(ai)

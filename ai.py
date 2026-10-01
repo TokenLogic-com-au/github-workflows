@@ -107,6 +107,8 @@ def call_api(prompt, api_key):
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         sys.exit(f"AI API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+    except TimeoutError:
+        sys.exit(f"AI API timed out after {TIMEOUT}s")
     log_usage(payload)
     try:
         if STYLE == "anthropic":
