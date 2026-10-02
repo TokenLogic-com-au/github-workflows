@@ -20,6 +20,9 @@ OUTPUT_CAP = int(os.environ.get("AI_OUTPUT_CAP") or "20000")
 TIMEOUT = int(os.environ.get("AI_TIMEOUT") or "120")
 API_URL = os.environ.get("AI_API_URL") or (None if STYLE == "openai" else "https://api.anthropic.com/v1/messages")
 REASONING_EFFORT = os.environ.get("AI_REASONING_EFFORT") or ""
+ANTHROPIC_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+if STYLE == "anthropic" and REASONING_EFFORT and REASONING_EFFORT not in ANTHROPIC_EFFORTS:
+    sys.exit(f"invalid AI_REASONING_EFFORT for anthropic: {REASONING_EFFORT!r} (must be one of {ANTHROPIC_EFFORTS})")
 RESPONSE_FORMAT = os.environ.get("AI_RESPONSE_FORMAT") or ""
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -51,6 +54,10 @@ def strip_think(text):
 def build_request_body(prompt):
     """Pure function (no I/O) so the request shape is unit-testable."""
     body = {"model": MODEL, "max_tokens": MAX_TOKENS, "messages": [{"role": "user", "content": prompt}]}
+    if STYLE == "anthropic":
+        body["thinking"] = {"type": "adaptive"}
+        if REASONING_EFFORT:
+            body["output_config"] = {"effort": REASONING_EFFORT}
     if STYLE == "openai":
         if REASONING_EFFORT:
             if REASONING_EFFORT == "off":
@@ -100,11 +107,16 @@ def call_api(prompt, api_key):
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         sys.exit(f"AI API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+    except TimeoutError:
+        sys.exit(f"AI API timed out after {TIMEOUT}s")
     log_usage(payload)
     try:
         if STYLE == "anthropic":
             if payload.get("stop_reason") == "max_tokens":
                 sys.exit("model response was truncated (stop_reason=max_tokens)")
+            if payload.get("stop_reason") == "refusal":
+                category = (payload.get("stop_details") or {}).get("category", "none")
+                sys.exit(f"model refused (category: {category})")
             text = "".join(b["text"] for b in payload["content"] if "text" in b)
         else:
             choice = payload["choices"][0]

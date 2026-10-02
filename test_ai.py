@@ -289,6 +289,13 @@ class ErrorPathTests(unittest.TestCase):
         self.assertNotIn("OVERFLOW-MARKER-BEYOND-CAP", message)
 
 
+class TimeoutTests(unittest.TestCase):
+    def test_urlopen_timeout_exits_with_clear_message(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _live({"ANTHROPIC_API_KEY": "test-key"}, None, urlopen_side_effect=TimeoutError())
+        self.assertEqual(str(ctx.exception), "AI API timed out after 120s")
+
+
 class BuildRequestBodyTests(unittest.TestCase):
     def tearDown(self):
         importlib.reload(ai)
@@ -338,6 +345,69 @@ class BuildRequestBodyTests(unittest.TestCase):
         self.assertEqual(body["model"], "test-org/test-model")
         self.assertEqual(body["max_tokens"], 999)
         self.assertEqual(body["messages"], [{"role": "user", "content": "the prompt"}])
+
+
+class AnthropicEffortTests(unittest.TestCase):
+    def tearDown(self):
+        importlib.reload(ai)
+
+    def test_request_body_without_effort_has_thinking_only(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic"}, clear=False):
+            os.environ.pop("AI_REASONING_EFFORT", None)
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["thinking"], {"type": "adaptive"})
+        self.assertNotIn("output_config", body)
+
+    def test_request_body_with_effort_high(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic", "AI_REASONING_EFFORT": "high"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["thinking"], {"type": "adaptive"})
+        self.assertEqual(body["output_config"], {"effort": "high"})
+        self.assertNotIn("budget_tokens", body["thinking"])
+
+    def test_invalid_effort_value_is_startup_fatal(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic", "AI_REASONING_EFFORT": "medium-ish"}, clear=False):
+            with self.assertRaises(SystemExit):
+                importlib.reload(ai)
+
+    def test_off_is_not_valid_on_anthropic_path(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic", "AI_REASONING_EFFORT": "off"}, clear=False):
+            with self.assertRaises(SystemExit):
+                importlib.reload(ai)
+
+    def test_refusal_stop_reason_exits_with_category(self):
+        response = {"stop_reason": "refusal", "stop_details": {"category": "policy"}, "content": []}
+        with self.assertRaises(SystemExit) as ctx:
+            _live({"ANTHROPIC_API_KEY": "test-key"}, response)
+        self.assertIn("refused", str(ctx.exception))
+        self.assertIn("policy", str(ctx.exception))
+
+    def test_refusal_stop_reason_without_category_reports_none(self):
+        response = {"stop_reason": "refusal", "content": []}
+        with self.assertRaises(SystemExit) as ctx:
+            _live({"ANTHROPIC_API_KEY": "test-key"}, response)
+        self.assertIn("none", str(ctx.exception))
+
+    def test_mixed_thinking_and_text_blocks_join_text_only(self):
+        response = {
+            "content": [
+                {"type": "thinking", "thinking": "internal reasoning, not output"},
+                {"type": "text", "text": "final "},
+                {"type": "text", "text": "answer"},
+            ]
+        }
+        content, _, _ = _live({"ANTHROPIC_API_KEY": "test-key"}, response)
+        self.assertEqual(content, "final answer")
+
+    def test_openai_path_body_unchanged_by_effort_support(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_REASONING_EFFORT": "high"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["reasoning"], {"effort": "high"})
+        self.assertNotIn("thinking", body)
+        self.assertNotIn("output_config", body)
 
 
 class LogUsageTests(unittest.TestCase):
