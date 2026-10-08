@@ -97,11 +97,16 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+      - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - name: Find unrecognized raw addresses
         id: measure
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DIR: ${{ needs.scope.outputs.dir }}
         run: |
           # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
           # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
@@ -127,6 +132,13 @@ jobs:
             exit 0
           fi
           book_text_lc=$(cat $book | tr 'A-F' 'a-f')
+          # An asset this proposal lists gets its underlying/oracle added to the
+          # book only after the listing executes, so those addresses are shown
+          # as a notice rather than a warning. The committed diff report (same
+          # lookup as the advisory job) says which addresses those are; with no
+          # committed report every unknown address stays a warning.
+          proposal_name=$(basename "$DIR" | sed -E 's/^[0-9]{8}_//')
+          report=$(find diffs -name "*${proposal_name}*.md" 2>/dev/null | sort | tail -1 || true)
           nl=$'\n'
           fail=0
           details=""
@@ -140,9 +152,16 @@ jobs:
             case "$book_text_lc" in
               *"$addr_lc"*) ;;
               *)
-                echo "::warning file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
-                details="${details}${file}|${lineno}|raw address ${addr} not in the address book${nl}"
-                fail=1
+                pending=""
+                [ -n "$report" ] && pending=$(python3 "$GW/address_book.py" pending-listing "$report" "$addr")
+                if [ -n "$pending" ]; then
+                  echo "::notice file=$file,line=$lineno::$pending"
+                  details="${details}${file}|${lineno}|notice|${pending}${nl}"
+                else
+                  echo "::warning file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+                  details="${details}${file}|${lineno}|warning|raw address ${addr} not in the address book${nl}"
+                  fail=1
+                fi
                 ;;
             esac
           done < <(

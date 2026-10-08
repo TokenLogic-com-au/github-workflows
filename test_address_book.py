@@ -446,5 +446,138 @@ class NewReserveSymbolsTests(unittest.TestCase):
         self.assertEqual(ab.new_reserve_symbols(text), {"PT-AUSD-17DEC2026"})
 
 
+PT_AUSD_UNDERLYING = "0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57"
+PT_AUSD_ORACLE = "0x608250bbc11eeaeD31794f976946399eB49bd57c"
+V4_REPORT = (
+    "## Hub Asset Changes\n\n"
+    "### PT-USDG-24SEP2026 (assetId: 5) on Hub [0x62d63197660c080236193CA60b70E49A08E90368](https://x)\n\n"
+    "**NEW ASSET**\n\n"
+    "| description | value |\n| --- | --- |\n"
+    "| symbol | PT-USDG-24SEP2026 |\n"
+    "| underlying | [0x45804880De22913dAFE09f4980848ECE6EcbAf78](https://x) |\n"
+    "| irStrategy | [0xD7eC225DC053151100A0ef47b94a77AAD9C413b7](https://x) |\n\n"
+    "### WETH (assetId: 1) on Hub [0x62d63197660c080236193CA60b70E49A08E90368](https://x)\n\n"
+    "| description | value before | value after |\n| --- | --- | --- |\n"
+    "| underlying | [0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2](https://x) | same |\n\n"
+    "## Event logs\n\n"
+    "#### 0x62d63197660c080236193CA60b70E49A08E90368 (AaveV4Ethereum.HUBS.GLOBAL_DOLLAR_HUB)\n"
+)
+
+
+class PendingListingMessageTests(unittest.TestCase):
+    def test_pt_ausd_underlying_is_generated_after_listing(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        self.assertEqual(
+            ab.pending_listing_message(text, PT_AUSD_UNDERLYING),
+            "0x8B56\u20266a57: PT-AUSD-17DEC2026 underlying, not in the address book yet; "
+            "expected as AaveV3MonadAssets.PT_AUSD_17DEC2026_UNDERLYING after the listing executes",
+        )
+
+    def test_pt_ausd_oracle_is_generated_after_listing(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        self.assertEqual(
+            ab.pending_listing_message(text, PT_AUSD_ORACLE),
+            "0x6082\u2026d57c: PT-AUSD-17DEC2026 oracle, not in the address book yet; "
+            "expected as AaveV3MonadAssets.PT_AUSD_17DEC2026_ORACLE after the listing executes",
+        )
+
+    def test_unrelated_address_is_not_pending(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        self.assertIsNone(ab.pending_listing_message(text, "0x1111111111111111111111111111111111111111"))
+
+    def test_address_match_is_case_insensitive(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
+        msg = ab.pending_listing_message(text, PT_AUSD_UNDERLYING.lower())
+        self.assertIn("AaveV3MonadAssets.PT_AUSD_17DEC2026_UNDERLYING", msg)
+
+    def test_non_listing_diff_has_nothing_pending(self):
+        text = _read_fixture("ethereum_february2026_funding_update_diff.md")
+        self.assertIsNone(ab.pending_listing_message(text, PT_AUSD_UNDERLYING))
+        self.assertIsNone(ab.pending_listing_message("", PT_AUSD_UNDERLYING))
+
+    def test_reserve_under_reserves_changed_is_not_pending(self):
+        text = (
+            "### Reserves changed\n\n"
+            "#### WETH ([0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2](https://x))\n\n"
+            "| description | value before | value after |\n| --- | --- | --- |\n"
+            "| oracle | [0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419](https://x) | same |\n\n"
+            "#### 0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef (AaveV3Monad.POOL)\n"
+        )
+        self.assertIsNone(
+            ab.pending_listing_message(text, "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+        )
+
+    def test_library_not_derivable_prints_entry_name_only(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md").replace("AaveV3Monad.POOL)", "POOL)")
+        self.assertEqual(
+            ab.pending_listing_message(text, PT_AUSD_UNDERLYING),
+            "0x8B56\u20266a57: PT-AUSD-17DEC2026 underlying, not in the address book yet; "
+            "expected as PT_AUSD_17DEC2026_UNDERLYING after the listing executes",
+        )
+
+    def test_two_different_pool_libraries_is_not_derivable(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md") + (
+            "\n#### 0x1111111111111111111111111111111111111111 (AaveV3Base.POOL)\n"
+        )
+        self.assertNotIn("AaveV3", ab.pending_listing_message(text, PT_AUSD_UNDERLYING))
+
+    def test_v3_symbol_follows_generator_rules(self):
+        base = (
+            "### Reserves added\n\n"
+            "#### {sym} ([0x2222222222222222222222222222222222222222](https://x))\n\n"
+            "| description | value |\n| --- | --- |\n| id | 1 |\n\n"
+            "#### 0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef (AaveV3Arbitrum.POOL)\n"
+        )
+        cases = {
+            "1INCH": "ONE_INCH_UNDERLYING",
+            "fUSDT": "USDT_UNDERLYING",
+            "stETH.v2": "stETHv2_UNDERLYING",
+            "A B C": "A_B_C_UNDERLYING",
+            "3CRV": "_3CRV_UNDERLYING",
+            "BTC+": "BTCPlus_UNDERLYING",
+        }
+        for sym, expected in cases.items():
+            msg = ab.pending_listing_message(
+                base.format(sym=sym), "0x2222222222222222222222222222222222222222"
+            )
+            self.assertIn(f"expected as AaveV3ArbitrumAssets.{expected} after", msg, sym)
+
+    def test_v4_new_hub_asset_underlying_is_pending(self):
+        self.assertEqual(
+            ab.pending_listing_message(V4_REPORT, "0x45804880De22913dAFE09f4980848ECE6EcbAf78"),
+            "0x4580\u2026Af78: PT-USDG-24SEP2026 underlying, not in the address book yet; "
+            "expected as AaveV4EthereumAssets.PT_USDG_24SEP2026_UNDERLYING after the listing executes",
+        )
+
+    def test_v4_ir_strategy_and_changed_asset_are_not_pending(self):
+        for addr in (
+            "0xD7eC225DC053151100A0ef47b94a77AAD9C413b7",
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        ):
+            self.assertIsNone(ab.pending_listing_message(V4_REPORT, addr))
+
+
+class PendingListingCliTests(unittest.TestCase):
+    def _run(self, report_name, addr):
+        import subprocess
+
+        return subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(ab.__file__), "address_book.py"),
+             "pending-listing", os.path.join(FIXTURES_DIR, report_name), addr],
+            capture_output=True, text=True,
+        )
+
+    def test_prints_message_for_pending_address(self):
+        r = self._run("pt_ausd_17dec2026_monad_listing_diff.md", PT_AUSD_ORACLE)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("PT_AUSD_17DEC2026_ORACLE", r.stdout)
+
+    def test_prints_nothing_for_other_address_and_missing_report(self):
+        r = self._run("pt_ausd_17dec2026_monad_listing_diff.md", "0x1111111111111111111111111111111111111111")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        r = self._run("does_not_exist.md", PT_AUSD_ORACLE)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
 if __name__ == "__main__":
     unittest.main()
