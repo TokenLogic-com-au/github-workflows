@@ -42,6 +42,7 @@ auto-linking, e.g. bare `www.` / `.com` text).
 """
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 
 # Conservative charset for any label/symbol value that ends up in the
@@ -104,7 +105,13 @@ _RESERVE_TOKEN_FIELDS = (
 
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _RESERVES_ADDED_SECTION_RE = re.compile(r"^### Reserves added\n(.*?)(?=^#{1,3}\s|\Z)", re.MULTILINE | re.DOTALL)
-_RESERVE_SYMBOL_HEADER_RE = re.compile(r"^####\s+([A-Za-z0-9_.\-+ ]{1,64}?)\s+\(\[", re.MULTILINE)
+# A V4 hub asset listed by the proposal: "### SYMBOL (assetId: N) on Hub [..](..)"
+# followed by a "**NEW ASSET**" marker and the asset's table.
+_V4_NEW_ASSET_RE = re.compile(
+    r"^###\s+([A-Za-z0-9_.\-+ ]{1,64}?)\s+\(assetId:\s*\d+\)\s+on Hub\s+\[[^\]\n]*\]\([^)\n]*\)\s*\n\n"
+    r"\*\*NEW ASSET\*\*\s*\n\n((?:\|.*\n?)+)",
+    re.MULTILINE,
+)
 
 
 def _friendly_asset_role(label: str):
@@ -200,21 +207,152 @@ def build_maps(diff_report_text: str):
     return label_map, symbol_map
 
 
+# A fenced code block is quoted text, never report structure: a fabricated
+# "Reserves added" block or `Library.POOL` label inside one must not count.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# The V3 generator (fixSymbol) rewrites the non-ASCII USD stablecoin symbols
+# to USDT before naming a constant; the sanitized charset rejects them.
+_NON_ASCII_USDT_HEADING_RE = re.compile(r"^(####[^\n]*?)USD\u20ae0?", re.MULTILINE)
+
+
+def _strip_fences(text: str) -> str:
+    """Drops fenced code blocks per CommonMark: a fence closes only on a line
+    of the same character, at least as long as the opener, with nothing but
+    whitespace after it; an unclosed fence runs to the end of the document."""
+    kept = []
+    fence = None
+    for line in (text or "").split("\n"):
+        if fence is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                fence = m.group(1)
+                continue
+            kept.append(line)
+        else:
+            stripped = line.lstrip(" ")
+            indent_ok = len(line) - len(stripped) <= 3
+            if indent_ok and stripped.rstrip() and set(stripped.rstrip()) == {fence[0]} and len(stripped.rstrip()) >= len(fence):
+                fence = None
+    return "\n".join(kept)
+
+
+def _table_fields(table_text: str):
+    fields = {}
+    for key, addr, plain in _TABLE_ROW_RE.findall(table_text):
+        fields[key] = addr.lower() if addr else plain.strip()
+    return fields
+
+
+def _added_reserves(diff_report_text: str):
+    """Yields (symbol, underlying, fields) for every reserve listed under a
+    "### Reserves added" section, `fields` being the reserve table's
+    key -> lowercased address / plain value."""
+    text = _strip_fences(diff_report_text)
+    text = _NON_ASCII_USDT_HEADING_RE.sub(r"\1USDT", text)
+    for section in _RESERVES_ADDED_SECTION_RE.findall(text):
+        for raw_symbol, underlying, table_text in _RESERVE_BLOCK_RE.findall(section):
+            safe = sanitize_token(raw_symbol)
+            if safe:
+                yield safe, underlying.lower(), _table_fields(table_text)
+
+
 def new_reserve_symbols(diff_report_text: str):
     """The symbols of every reserve listed under a "### Reserves added"
     section -- used to tell a genuine new-listing seed apart from an
     ordinary supply into an already-existing reserve (e.g. a funding
     update's Collector deposit), which shares the exact same
     approve/supply/mint event shape."""
-    symbols = set()
+    return {symbol for symbol, _underlying, _fields in _added_reserves(diff_report_text)}
+
+
+# aave-address-book's generator (scripts/generator/utils.ts keyToVar) turns
+# every `<SYMBOL>_<ROLE>` key into a Solidity identifier with these rules.
+def _key_to_var(key: str) -> str:
+    key = re.sub(r"^(\d)", r"_\1", key)
+    key = key.replace("+", "Plus").replace(".", "")
+    key = re.sub(r"[^\w ]", " ", key).strip()
+    return re.sub(r" +", "_", key)
+
+
+# V3 generator (assetsLibraryGenerator.ts fixSymbol): the symbol rewrites that
+# apply to a brand-new reserve (the per-underlying overrides cover assets that
+# were listed long ago).
+def _v3_constant(symbol: str, role: str) -> str:
+    if symbol == "fUSDT":
+        symbol = "USDT"
+    elif symbol == "1INCH":
+        symbol = "ONE_INCH"
+    else:
+        symbol = symbol.replace("-", "_").replace(".", "", 1).replace(" ", "_", 1)
+    return _key_to_var(f"{symbol}_{role}")
+
+
+# V4 generator (fetchHubAssets.ts): only `-` -> `_`, then keyToVar.
+def _v4_constant(symbol: str, role: str) -> str:
+    return _key_to_var(f"{symbol.replace('-', '_')}_{role}")
+
+
+_V3_POOL_LIBRARY_RE = re.compile(r"\b(AaveV3[A-Za-z0-9]*)\.POOL\b")
+_V4_LIBRARY_RE = re.compile(r"\b(AaveV4[A-Za-z0-9]*)\.[A-Z]")
+
+
+def _sole_library(pattern, diff_report_text: str):
+    """The generated `<library>Assets` name, only when the diff report's own
+    labels name exactly one such library -- never a guess."""
+    names = set(pattern.findall(diff_report_text))
+    return f"{names.pop()}Assets" if len(names) == 1 else None
+
+
+def pending_listing_entries(diff_report_text: str):
+    """{address_lower: (symbol, role, qualified_constant)} for every address
+    aave-address-book's generator will add AFTER the listing in this diff
+    report executes, so it cannot be in the book yet: a V3 reserve's
+    underlying and oracle (`<SYM>_UNDERLYING` / `<SYM>_ORACLE` in
+    `AaveV3<Chain>Assets`) and a V4 hub asset's underlying
+    (`<SYM>_UNDERLYING` in `AaveV4<Chain>Assets`; the V4 generator emits no
+    per-asset oracle). `qualified_constant` is the bare constant name when
+    the library cannot be derived."""
+    entries = {}
+    diff_report_text = _strip_fences(diff_report_text)
     if not diff_report_text:
-        return symbols
-    for section in _RESERVES_ADDED_SECTION_RE.findall(diff_report_text):
-        for raw_symbol in _RESERVE_SYMBOL_HEADER_RE.findall(section):
-            safe = sanitize_token(raw_symbol)
-            if safe:
-                symbols.add(safe)
-    return symbols
+        return entries
+
+    def add(addr, symbol, role, constant, library):
+        if addr and _ADDR_RE.match(addr):
+            qualified = f"{library}.{constant}" if library else constant
+            entries.setdefault(addr.lower(), (symbol, role, qualified))
+
+    v3_library = _sole_library(_V3_POOL_LIBRARY_RE, diff_report_text)
+    for symbol, underlying, fields in _added_reserves(diff_report_text):
+        add(underlying, symbol, "underlying", _v3_constant(symbol, "UNDERLYING"), v3_library)
+        add(fields.get("oracle"), symbol, "oracle", _v3_constant(symbol, "ORACLE"), v3_library)
+
+    v4_library = _sole_library(_V4_LIBRARY_RE, diff_report_text)
+    for raw_symbol, table_text in _V4_NEW_ASSET_RE.findall(diff_report_text):
+        safe = sanitize_token(raw_symbol)
+        if safe:
+            add(
+                _table_fields(table_text).get("underlying"),
+                safe,
+                "underlying",
+                _v4_constant(safe, "UNDERLYING"),
+                v4_library,
+            )
+    return entries
+
+
+def pending_listing_message(diff_report_text: str, addr: str):
+    """The reviewer-facing note for a raw address that this proposal's own
+    listing will add to the address book, or None when it is not one."""
+    entry = pending_listing_entries(diff_report_text).get(addr.lower())
+    if not entry:
+        return None
+    symbol, role, qualified = entry
+    short = f"{addr[:6]}\u2026{addr[-4:]}"
+    return (
+        f"{short}: {symbol} {role}, not in the address book yet; "
+        f"expected as {qualified} after the listing executes"
+    )
 
 
 _LIBRARY_RE = re.compile(r"\blibrary\s+(\w+)\s*\{")
@@ -390,3 +528,25 @@ def describe_address(addr, label_map, symbol_map, solidity_labels=None, chain=No
     if label:
         return f"`{label}` ({addr})"
     return addr
+
+
+def main(argv):
+    """`address_book.py pending-listing REPORT ADDRESS`: prints the
+    pending-listing note for ADDRESS, or nothing when REPORT is unreadable
+    or does not list it. Always exits 0 -- a lookup miss is not an error."""
+    if len(argv) != 4 or argv[1] != "pending-listing":
+        sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS\n")
+        return 2
+    try:
+        with open(argv[2], encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return 0
+    message = pending_listing_message(text, argv[3])
+    if message:
+        print(message)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -33,15 +33,32 @@ def _blob_link(repo: str, head_sha: str, file: str, line: str) -> str:
     return f"[{short}:{line}]({url})"
 
 
-def _render_address_book_table(raw_detail: str, repo: str, head_sha: str) -> str:
+ADDRESS_BOOK_NOTICE = "notice"
+
+
+def _address_book_rows(raw_detail: str):
+    """(kind, file, line, message) for each `file|line|kind|message` row;
+    kind is "warning" or ADDRESS_BOOK_NOTICE."""
     rows = []
     for line in raw_detail.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("|", 2)
-        if len(parts) != 3:
-            continue
-        file, ln, msg = parts
+        parts = line.split("|", 3)
+        if len(parts) == 4:
+            file, ln, kind, msg = parts
+            rows.append((kind, file, ln, msg))
+    return rows
+
+
+def _address_book_kind_detail(raw_detail: str, notice: bool) -> str:
+    return "\n".join(
+        f"{file}|{ln}|{kind}|{msg}"
+        for kind, file, ln, msg in _address_book_rows(raw_detail)
+        if (kind == ADDRESS_BOOK_NOTICE) == notice
+    )
+
+
+def _render_address_book_table(raw_detail: str, repo: str, head_sha: str) -> str:
+    rows = []
+    for _kind, file, ln, msg in _address_book_rows(raw_detail):
         link = _blob_link(repo, head_sha, file, ln)
         rows.append(f"| {link} | {sanitize_markdown(msg, 200)} |")
     if not rows:
@@ -85,6 +102,8 @@ def render(
     for name in CHECK_ORDER:
         result = results.get(name, "unknown")
         has_findings = bool(details.get(name, "").strip())
+        if name == "address-book":
+            has_findings = bool(_address_book_kind_detail(details.get(name, ""), notice=False))
         lines.append(f"- {_icon(name, result, has_findings, advisory_has_issues)} **{name}**")
 
     for name in CHECK_ORDER:
@@ -110,6 +129,15 @@ def render(
                 lines.append("")
                 table = table_fn(raw_detail, repo, head_sha) if raw_detail else "(no details captured)"
                 lines.append(f"> [!CAUTION]\n> **{name} failed**\n\n" + table)
+            elif name == "address-book":
+                warnings = _address_book_kind_detail(raw_detail, notice=False)
+                notices = _address_book_kind_detail(raw_detail, notice=True)
+                if warnings:
+                    lines.append("")
+                    lines.append(f"> [!WARNING]\n> **{name}: warnings**\n\n" + table_fn(warnings, repo, head_sha))
+                if notices:
+                    lines.append("")
+                    lines.append(f"> [!NOTE]\n> **{name}: generated after listing**\n\n" + table_fn(notices, repo, head_sha))
             elif raw_detail:
                 lines.append("")
                 lines.append(f"> [!WARNING]\n> **{name}: warnings**\n\n" + table_fn(raw_detail, repo, head_sha))

@@ -31,7 +31,7 @@ class RenderTests(unittest.TestCase):
     def test_address_book_findings_render_table_with_blob_link_as_warning(self):
         # address-book job always succeeds now; findings are non-blocking warnings.
         results = {k: "success" for k in rsc.CHECK_ORDER}
-        details = {"address-book": "src/x/Foo.sol|12|raw address 0xabc not in the address book"}
+        details = {"address-book": "src/x/Foo.sol|12|warning|raw address 0xabc not in the address book"}
         out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
         self.assertIn("⚠️ **address-book**", out)
         self.assertNotIn("❌ **address-book**", out)
@@ -42,12 +42,43 @@ class RenderTests(unittest.TestCase):
         self.assertIn(f"https://github.com/{REPO}/blob/{SHA}/src/x/Foo.sol#L12", out)
         self.assertIn("Foo.sol:12", out)
 
+    def test_notice_only_address_book_is_not_a_warning_and_renders_distinctly(self):
+        results = {k: "success" for k in rsc.CHECK_ORDER}
+        details = {"address-book": "src/x/Foo.sol|12|notice|0x8B56\u20266a57: USDG underlying, not in the address book yet"}
+        out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
+        self.assertIn("\u2705 **address-book**", out)
+        self.assertNotIn("\u26a0\ufe0f **address-book**", out)
+        self.assertNotIn("[!WARNING]", out)
+        self.assertNotIn("address-book: warnings", out)
+        self.assertIn("[!NOTE]", out)
+        self.assertIn("address-book: generated after listing", out)
+        self.assertIn("USDG underlying, not in the address book yet", out)
+        self.assertIn("Foo.sol:12", out)
+
+    def test_mixed_notice_and_warning_rows_render_in_separate_tables(self):
+        results = {k: "success" for k in rsc.CHECK_ORDER}
+        details = {
+            "address-book": (
+                "src/x/Foo.sol|12|notice|0x8B56\u20266a57: USDG underlying, not in the address book yet\n"
+                "src/x/Bar.sol|34|warning|raw address 0xdef not in the address book"
+            )
+        }
+        out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
+        self.assertIn("\u26a0\ufe0f **address-book**", out)
+        warn_at = out.index("address-book: warnings")
+        note_at = out.index("address-book: generated after listing")
+        self.assertLess(out.index("Bar.sol:34"), note_at)
+        self.assertGreater(out.index("Bar.sol:34"), warn_at)
+        self.assertGreater(out.index("Foo.sol:12"), note_at)
+        self.assertEqual(out.count("Foo.sol:12"), 1)
+        self.assertEqual(out.count("Bar.sol:34"), 1)
+
     def test_address_book_two_findings_render_two_rows(self):
         results = {k: "success" for k in rsc.CHECK_ORDER}
         details = {
             "address-book": (
-                "src/x/Foo.sol|12|raw address 0xabc not in the address book\n"
-                "src/x/Bar.sol|34|raw address 0xdef not in the address book"
+                "src/x/Foo.sol|12|warning|raw address 0xabc not in the address book\n"
+                "src/x/Bar.sol|34|warning|raw address 0xdef not in the address book"
             )
         }
         out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
@@ -93,7 +124,7 @@ class RenderTests(unittest.TestCase):
         # the summary must never show ❌ for them, only ⚠️.
         results = {k: "success" for k in rsc.CHECK_ORDER}
         details = {
-            "address-book": "src/x/Foo.sol|12|raw address 0xabc not in the address book",
+            "address-book": "src/x/Foo.sol|12|warning|raw address 0xabc not in the address book",
             "spelling": "src/x.md|9|liqudity|liquidity|for DEX liqudity on Aave",
         }
         out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
@@ -157,7 +188,7 @@ class RenderTests(unittest.TestCase):
 
     def test_details_are_sanitized(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "address-book": "failure"}
-        details = {"address-book": "src/x.sol|3|<script>alert(1)</script> not in book"}
+        details = {"address-book": "src/x.sol|3|warning|<script>alert(1)</script> not in book"}
         out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
         self.assertNotIn("<script>", out)
 
@@ -179,7 +210,7 @@ class RenderTests(unittest.TestCase):
 
     def test_no_repo_or_sha_falls_back_to_plain_filename(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "address-book": "failure"}
-        details = {"address-book": "src/x.sol|3|not in book"}
+        details = {"address-book": "src/x.sol|3|warning|not in book"}
         out = rsc.render(results, details, "100", "100", "", False, "", "")
         self.assertIn("src/x.sol", out)
         self.assertNotIn("https://github.com", out)
