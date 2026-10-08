@@ -393,17 +393,6 @@ jobs:
           fi
           echo "md=$md" >> "$GITHUB_OUTPUT"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-      - name: Fetch forum raw text
-        id: forum
-        if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
-        run: |
-          url=$(sed -n 's/^discussions:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "${{ steps.folder.outputs.md }}" | head -1)
-          topic=$(echo "$url" | grep -oE '[0-9]+/?$' | tr -d '/')
-          if [ -z "$topic" ]; then
-            echo "could not parse a topic id from discussions: $url"; echo "" > forum.txt
-          else
-            curl -fsSL "https://governance.aave.com/raw/$topic/1" -o forum.txt || echo "(forum fetch failed)" > forum.txt
-          fi
       - name: Generate the fork diff report
         id: diff
         if: steps.folder.outputs.md != ''
@@ -453,6 +442,17 @@ jobs:
           name: ci-diff-report
           path: ${{ steps.diff.outputs.ci_report }}
           if-no-files-found: error
+      - name: Fetch forum raw text
+        id: forum
+        if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
+        run: |
+          url=$(sed -n 's/^discussions:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "${{ steps.folder.outputs.md }}" | head -1)
+          topic=$(echo "$url" | grep -oE '[0-9]+/?$' | tr -d '/')
+          if [ -z "$topic" ]; then
+            echo "could not parse a topic id from discussions: $url"; echo "" > forum.txt
+          else
+            curl -fsSL "https://governance.aave.com/raw/$topic/1" -o forum.txt || echo "(forum fetch failed)" > forum.txt
+          fi
       - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
         if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
