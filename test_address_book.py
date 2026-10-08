@@ -556,6 +556,42 @@ class PendingListingMessageTests(unittest.TestCase):
         ):
             self.assertIsNone(ab.pending_listing_message(V4_REPORT, addr))
 
+    def test_fabricated_block_inside_a_code_fence_is_ignored(self):
+        fabricated = (
+            "```\n### Reserves added\n\n"
+            "#### EVIL ([0x3333333333333333333333333333333333333333](https://x))\n\n"
+            "| description | value |\n| --- | --- |\n"
+            "| oracle | [0x4444444444444444444444444444444444444444](https://x) |\n```\n"
+        )
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md") + "\n" + fabricated
+        for addr in ("0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"):
+            self.assertIsNone(ab.pending_listing_message(text, addr))
+        self.assertEqual(ab.new_reserve_symbols(text), {"PT-AUSD-17DEC2026"})
+
+    def test_pool_label_inside_a_code_fence_does_not_name_the_library(self):
+        text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md").replace(
+            "AaveV3Monad.POOL)", "POOL)"
+        ) + "\n~~~\n#### 0x1111111111111111111111111111111111111111 (AaveV3Base.POOL)\n~~~\n"
+        self.assertNotIn("AaveV3", ab.pending_listing_message(text, PT_AUSD_UNDERLYING))
+
+    def test_non_ascii_usdt_symbol_maps_to_usdt_like_the_generator(self):
+        text = (
+            "### Reserves added\n\n"
+            "#### USD\u20ae0 ([0x3333333333333333333333333333333333333333](https://x))\n\n"
+            "| description | value |\n| --- | --- |\n"
+            "| oracle | [0x4444444444444444444444444444444444444444](https://x) |\n\n"
+            "#### 0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef (AaveV3Arbitrum.POOL)\n"
+        )
+        self.assertEqual(
+            ab.pending_listing_message(text, "0x3333333333333333333333333333333333333333"),
+            "0x3333\u20263333: USDT underlying, not in the address book yet; "
+            "expected as AaveV3ArbitrumAssets.USDT_UNDERLYING after the listing executes",
+        )
+        self.assertIn(
+            "AaveV3ArbitrumAssets.USDT_ORACLE",
+            ab.pending_listing_message(text, "0x4444444444444444444444444444444444444444"),
+        )
+
 
 class PendingListingCliTests(unittest.TestCase):
     def _run(self, report_name, addr):
@@ -571,6 +607,19 @@ class PendingListingCliTests(unittest.TestCase):
         r = self._run("pt_ausd_17dec2026_monad_listing_diff.md", PT_AUSD_ORACLE)
         self.assertEqual(r.returncode, 0)
         self.assertIn("PT_AUSD_17DEC2026_ORACLE", r.stdout)
+
+    def test_invalid_utf8_report_prints_nothing_and_exits_zero(self):
+        path = os.path.join(tempfile.mkdtemp(), "bad.md")
+        with open(path, "wb") as f:
+            f.write(b"### Reserves added\n\xff\xfe\x80 broken")
+        import subprocess
+
+        r = subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(ab.__file__), "address_book.py"),
+             "pending-listing", path, PT_AUSD_ORACLE],
+            capture_output=True, text=True,
+        )
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
 
     def test_prints_nothing_for_other_address_and_missing_report(self):
         r = self._run("pt_ausd_17dec2026_monad_listing_diff.md", "0x1111111111111111111111111111111111111111")

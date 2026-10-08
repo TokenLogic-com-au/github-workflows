@@ -207,6 +207,18 @@ def build_maps(diff_report_text: str):
     return label_map, symbol_map
 
 
+# A fenced code block is quoted text, never report structure: a fabricated
+# "Reserves added" block or `Library.POOL` label inside one must not count.
+_FENCE_RE = re.compile(r"^ {0,3}(```|~~~).*?(?:^ {0,3}\1[^\n]*$|\Z)", re.MULTILINE | re.DOTALL)
+# The V3 generator (fixSymbol) rewrites the non-ASCII USD stablecoin symbols
+# to USDT before naming a constant; the sanitized charset rejects them.
+_NON_ASCII_USDT_HEADING_RE = re.compile(r"^(####[^\n]*?)USD\u20ae0?", re.MULTILINE)
+
+
+def _strip_fences(text: str) -> str:
+    return _FENCE_RE.sub("", text or "")
+
+
 def _table_fields(table_text: str):
     fields = {}
     for key, addr, plain in _TABLE_ROW_RE.findall(table_text):
@@ -218,7 +230,9 @@ def _added_reserves(diff_report_text: str):
     """Yields (symbol, underlying, fields) for every reserve listed under a
     "### Reserves added" section, `fields` being the reserve table's
     key -> lowercased address / plain value."""
-    for section in _RESERVES_ADDED_SECTION_RE.findall(diff_report_text or ""):
+    text = _strip_fences(diff_report_text)
+    text = _NON_ASCII_USDT_HEADING_RE.sub(r"\1USDT", text)
+    for section in _RESERVES_ADDED_SECTION_RE.findall(text):
         for raw_symbol, underlying, table_text in _RESERVE_BLOCK_RE.findall(section):
             safe = sanitize_token(raw_symbol)
             if safe:
@@ -282,6 +296,7 @@ def pending_listing_entries(diff_report_text: str):
     per-asset oracle). `qualified_constant` is the bare constant name when
     the library cannot be derived."""
     entries = {}
+    diff_report_text = _strip_fences(diff_report_text)
     if not diff_report_text:
         return entries
 
@@ -506,7 +521,7 @@ def main(argv):
         sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS\n")
         return 2
     try:
-        with open(argv[2], encoding="utf-8") as f:
+        with open(argv[2], encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return 0

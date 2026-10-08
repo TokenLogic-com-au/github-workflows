@@ -85,8 +85,11 @@ jobs:
           esac
 
   address-book:
-    needs: scope
-    if: needs.scope.outputs.count == '1'
+    # Waits for advisory only to consume the diff report CI itself generated
+    # there (artifact ci-diff-report); runs even when advisory failed or was
+    # skipped, in which case every unknown address stays a warning.
+    needs: [scope, advisory]
+    if: ${{ !cancelled() && needs.scope.outputs.count == '1' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,12 +104,17 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Download the CI-generated diff report
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ci-diff-report
+          path: ci-diff-report
       - name: Find unrecognized raw addresses
         id: measure
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          DIR: ${{ needs.scope.outputs.dir }}
         run: |
           # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
           # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
@@ -134,11 +142,14 @@ jobs:
           book_text_lc=$(cat $book | tr 'A-F' 'a-f')
           # An asset this proposal lists gets its underlying/oracle added to the
           # book only after the listing executes, so those addresses are shown
-          # as a notice rather than a warning. The committed diff report (same
-          # lookup as the advisory job) says which addresses those are; with no
-          # committed report every unknown address stays a warning.
-          proposal_name=$(basename "$DIR" | sed -E 's/^[0-9]{8}_//')
-          report=$(find diffs -name "*${proposal_name}*.md" 2>/dev/null | sort | tail -1 || true)
+          # as a notice rather than a warning. Only the diff report CI itself
+          # generated (advisory job artifact) is trusted to say which addresses
+          # those are -- never one the PR author committed. Anything but exactly
+          # one downloaded file fails closed: every unknown address is a warning.
+          report=""
+          if [ -d ci-diff-report ] && [ "$(find ci-diff-report -type f | wc -l)" -eq 1 ]; then
+            report=$(find ci-diff-report -type f)
+          fi
           nl=$'\n'
           fail=0
           details=""
@@ -411,6 +422,8 @@ jobs:
             exit 0
           fi
           echo "no committed diff report found for $proposal_name; regenerating in CI"
+          snapshot() { find diffs -name '*.md' -type f -exec sha256sum {} + 2>/dev/null | sort || true; }
+          before=$(snapshot)
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
           mkdir -p diffs
           report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1 || true)
@@ -419,6 +432,15 @@ jobs:
           fi
           echo "report=${report:-}" >> "$GITHUB_OUTPUT"
           echo "source=regenerated" >> "$GITHUB_OUTPUT"
+          # ci_report: the one file this forge run created or changed -- the
+          # only report the address-book job may trust. Zero or several
+          # candidates leave it empty.
+          produced=$(comm -13 <(printf '%s\n' "$before") <(snapshot) | sed -E 's/^[0-9a-f]{64}  //')
+          if [ -n "$produced" ] && [ "$(printf '%s\n' "$produced" | wc -l)" -eq 1 ]; then
+            mkdir -p ci-diff-report
+            cp "$produced" ci-diff-report/report.md
+            echo "ci_report=ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
+          fi
           # No report written -- the fork test itself failed (e.g. a payload
           # asset's live-mainnet bytecode reverting under the wrong forge
           # profile). Name the failing test so the advisory comment can say
@@ -435,6 +457,12 @@ jobs:
         with:
           name: regenerated-diffs
           path: diffs/
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: steps.diff.outputs.ci_report != ''
+        with:
+          name: ci-diff-report
+          path: ${{ steps.diff.outputs.ci_report }}
+          if-no-files-found: error
       - uses: TokenLogic-com-au/github-workflows/.github/actions/scripts@main
         if: steps.folder.outputs.md != ''
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
