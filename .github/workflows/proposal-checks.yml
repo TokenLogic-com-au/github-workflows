@@ -144,7 +144,8 @@ jobs:
           # book only after the listing executes, so those addresses are shown
           # as a notice rather than a warning. Only the diff report CI itself
           # generated (advisory job artifact) is trusted to say which addresses
-          # those are -- never one the PR author committed. Anything but exactly
+          # those are -- never one the PR author committed (advisory sets those
+          # aside before its fork test). Anything but exactly
           # one downloaded file fails closed: every unknown address is a warning.
           report=""
           if [ -d ci-diff-report ] && [ "$(find ci-diff-report -type f | wc -l)" -eq 1 ]; then
@@ -405,42 +406,34 @@ jobs:
         id: diff
         if: steps.folder.outputs.md != ''
         run: |
-          # Like upstream aave-proposals-v3, the author commits diffs/*.md
-          # generated locally by the fork test -- so check the committed repo
-          # state FIRST, and only fall back to regenerating in CI (which needs
-          # --isolate, not just the forge-config annotation, for
-          # ProtocolV3TestBase.defaultTest's payload gas-limit check to pass;
-          # without it the check reverts before diffReports() ever writes a
-          # file) when nothing was committed.
-          proposal_name=$(basename "${{ steps.folder.outputs.dir }}" | sed -E 's/^[0-9]{8}_//')
-          committed=$(find diffs -name "*${proposal_name}*.md" 2>/dev/null | sort | tail -1 || true)
-          if [ -n "$committed" ]; then
-            echo "using committed diff report: $committed"
-            echo "report=$committed" >> "$GITHUB_OUTPUT"
-            echo "source=committed" >> "$GITHUB_OUTPUT"
-            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "no committed diff report found for $proposal_name; regenerating in CI"
-          snapshot() { find diffs -name '*.md' -type f -exec sha256sum {} + 2>/dev/null | sort || true; }
-          before=$(snapshot)
+          # The report is ALWAYS generated here by the fork test, never taken
+          # from the PR: an author-committed diffs/*.md is not trusted (it
+          # could say anything). Committed reports are set aside outside the
+          # workspace first, so every diffs/*.md present after the run was
+          # written by this CI run, even one byte-identical to a committed
+          # file. The fork test needs --isolate, not just the forge-config
+          # annotation, for ProtocolV3TestBase.defaultTest's payload gas-limit
+          # check to pass; without it the check reverts before diffReports()
+          # ever writes a file.
+          mkdir -p diffs
+          find diffs -name '*.md' -type f -print0 \
+            | tar --null -T - --remove-files -cf "$RUNNER_TEMP/committed-diffs.tar" 2>/dev/null || true
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
           mkdir -p diffs
-          report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1 || true)
-          if [ -z "$report" ]; then
-            report=$(find diffs -name '*.md' 2>/dev/null | sort | tail -1 || true)
-          fi
-          echo "report=${report:-}" >> "$GITHUB_OUTPUT"
-          echo "source=regenerated" >> "$GITHUB_OUTPUT"
-          # ci_report: the one file this forge run created or changed -- the
-          # only report the address-book job may trust. Zero or several
-          # candidates leave it empty.
-          produced=$(comm -13 <(printf '%s\n' "$before") <(snapshot) | sed -E 's/^[0-9a-f]{64}  //')
+          # Exactly one CI-written report is trusted; zero or several leave
+          # `report` empty and every consumer falls back to its no-report path.
+          produced=$(find diffs -name '*.md' -type f | sort)
+          report=""
+          fork_note=""
           if [ -n "$produced" ] && [ "$(printf '%s\n' "$produced" | wc -l)" -eq 1 ]; then
+            report="$produced"
             mkdir -p ci-diff-report
-            cp "$produced" ci-diff-report/report.md
+            cp "$report" ci-diff-report/report.md
             echo "ci_report=ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
+          elif [ -n "$produced" ]; then
+            fork_note="fork test wrote several diff reports"
           fi
+          echo "report=$report" >> "$GITHUB_OUTPUT"
           # No report written -- the fork test itself failed (e.g. a payload
           # asset's live-mainnet bytecode reverting under the wrong forge
           # profile). Name the failing test so the advisory comment can say
@@ -448,15 +441,10 @@ jobs:
           # completed".
           if [ -z "$report" ]; then
             fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
-            echo "fork_test_status=${fail_test:-forge test failed with no further detail}" >> "$GITHUB_OUTPUT"
+            echo "fork_test_status=${fork_note:-${fail_test:-forge test failed with no further detail}}" >> "$GITHUB_OUTPUT"
           else
             echo "fork_test_status=" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
-        if: steps.diff.outputs.source == 'regenerated' && steps.diff.outputs.report != ''
-        with:
-          name: regenerated-diffs
-          path: diffs/
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
         if: steps.diff.outputs.ci_report != ''
         with:
@@ -528,7 +516,6 @@ jobs:
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
-          DIFF_SOURCE: ${{ steps.diff.outputs.source }}
           FORK_TEST_STATUS: ${{ steps.diff.outputs.fork_test_status }}
           # Never interpolated into the script text -- read only through the
           # environment, same as every other untrusted PR-supplied value here.
@@ -557,11 +544,7 @@ jobs:
           book_root="lib/aave-helpers/lib/aave-address-book"
           [ -d "$book_root" ] || book_root=""
           python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt "$book_root"
-          if [ "$DIFF_SOURCE" = "committed" ]; then
-            diff_note="_Diff report: committed by the author._"
-          else
-            diff_note="_Diff report: regenerated in CI (none was committed)._"
-          fi
+          diff_note="_Diff report: generated in CI by the fork test._"
           { printf '%s\n' "$MARKER"; printf '%s\n\n' "$diff_note"; cat body.md; } > comment.md
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
             '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
