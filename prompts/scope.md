@@ -16,19 +16,20 @@ when `<issue-type>` is Feature, otherwise as a Task.
   - Deliverable: a concrete, testable definition of done.
 - Feature:
   - Scope/Context: what is being asked and why, stated plainly.
-  - The deliverable is the sum of its children (see `<children>`); do not ask
-    for a Deliverable section or an assignee.
+  - At least one child issue (see `<children>`): the deliverable is the sum of
+    its children. Do not ask for a Deliverable section or an assignee.
 
 The assignee is a board fact, not a question: never ask who will do the work.
 
 Ask a question only when a ready item above is missing or too vague to act on,
 one question per such item, most blocking first, each answerable in one line.
+When a Feature's `<children>` is empty, ask which child issues will deliver it.
 If the issue has every ready item, ask no questions.
 
 Never ask about size, evidence, dependencies, priority, product, work type,
 deliverable type, links, milestone, labels, style or wording: that is planning
 information and it does not block work from starting. Never ask about anything
-the input already answers: a set `<parent>`, the `<children>`, any value in
+the input already answers: a set `<parent>`, a non-empty `<children>`, any value in
 `<fields>`, the assignees or the board status. Do not repeat a question the
 issue body already lists under its own open questions, and re-read the body
 before asking one so a wasted round-trip is avoided.
