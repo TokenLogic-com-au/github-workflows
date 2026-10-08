@@ -592,6 +592,33 @@ class PendingListingMessageTests(unittest.TestCase):
             ab.pending_listing_message(text, "0x4444444444444444444444444444444444444444"),
         )
 
+    _FAB = (
+        "### Reserves added\n\n"
+        "#### EVIL ([0x3333333333333333333333333333333333333333](https://x))\n\n"
+        "| description | value |\n| --- | --- |\n"
+        "| oracle | [0x4444444444444444444444444444444444444444](https://x) |\n"
+    )
+
+    def _assert_fab_hidden(self, text):
+        for addr in ("0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"):
+            self.assertIsNone(ab.pending_listing_message(text, addr))
+
+    def test_four_backtick_fence_with_inner_three_backtick_line_hides_the_block(self):
+        self._assert_fab_hidden("````\n```\n" + self._FAB + "````\n")
+
+    def test_tilde_fence_is_not_closed_by_backticks(self):
+        self._assert_fab_hidden("~~~\n```\n" + self._FAB + "```\n~~~\n")
+
+    def test_unclosed_fence_hides_everything_after_it(self):
+        self._assert_fab_hidden("```\nsome text\n" + self._FAB)
+
+    def test_closing_fence_with_trailing_text_does_not_close(self):
+        self._assert_fab_hidden("```\n``` not a close\n" + self._FAB + "```\n")
+
+    def test_real_block_after_a_properly_closed_fence_still_counts(self):
+        text = "```\nquoted\n```\n" + self._FAB.replace("EVIL", "GOOD")
+        self.assertIn("GOOD", ab.pending_listing_message(text, "0x3333333333333333333333333333333333333333"))
+
 
 class PendingListingCliTests(unittest.TestCase):
     def _run(self, report_name, addr):

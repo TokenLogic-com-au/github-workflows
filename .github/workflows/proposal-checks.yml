@@ -109,7 +109,7 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ci-diff-report
-          path: ci-diff-report
+          path: ${{ runner.temp }}/ci-diff-report
       - name: Find unrecognized raw addresses
         id: measure
         env:
@@ -148,8 +148,11 @@ jobs:
           # aside before its fork test). Anything but exactly
           # one downloaded file fails closed: every unknown address is a warning.
           report=""
-          if [ -d ci-diff-report ] && [ "$(find ci-diff-report -type f | wc -l)" -eq 1 ]; then
-            report=$(find ci-diff-report -type f)
+          # Read only from the runner's temp dir: a workspace path could be
+          # pre-populated by a file the PR committed.
+          dl="$RUNNER_TEMP/ci-diff-report"
+          if [ -d "$dl" ] && [ "$(find "$dl" -type f | wc -l)" -eq 1 ]; then
+            report=$(find "$dl" -type f)
           fi
           nl=$'\n'
           fail=0
@@ -427,9 +430,9 @@ jobs:
           fork_note=""
           if [ -n "$produced" ] && [ "$(printf '%s\n' "$produced" | wc -l)" -eq 1 ]; then
             report="$produced"
-            mkdir -p ci-diff-report
-            cp "$report" ci-diff-report/report.md
-            echo "ci_report=ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
+            mkdir -p "$RUNNER_TEMP/ci-diff-report"
+            cp "$report" "$RUNNER_TEMP/ci-diff-report/report.md"
+            echo "ci_report=$RUNNER_TEMP/ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
           elif [ -n "$produced" ]; then
             fork_note="fork test wrote several diff reports"
           fi

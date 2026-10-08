@@ -209,14 +209,31 @@ def build_maps(diff_report_text: str):
 
 # A fenced code block is quoted text, never report structure: a fabricated
 # "Reserves added" block or `Library.POOL` label inside one must not count.
-_FENCE_RE = re.compile(r"^ {0,3}(```|~~~).*?(?:^ {0,3}\1[^\n]*$|\Z)", re.MULTILINE | re.DOTALL)
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 # The V3 generator (fixSymbol) rewrites the non-ASCII USD stablecoin symbols
 # to USDT before naming a constant; the sanitized charset rejects them.
 _NON_ASCII_USDT_HEADING_RE = re.compile(r"^(####[^\n]*?)USD\u20ae0?", re.MULTILINE)
 
 
 def _strip_fences(text: str) -> str:
-    return _FENCE_RE.sub("", text or "")
+    """Drops fenced code blocks per CommonMark: a fence closes only on a line
+    of the same character, at least as long as the opener, with nothing but
+    whitespace after it; an unclosed fence runs to the end of the document."""
+    kept = []
+    fence = None
+    for line in (text or "").split("\n"):
+        if fence is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                fence = m.group(1)
+                continue
+            kept.append(line)
+        else:
+            stripped = line.lstrip(" ")
+            indent_ok = len(line) - len(stripped) <= 3
+            if indent_ok and stripped.rstrip() and set(stripped.rstrip()) == {fence[0]} and len(stripped.rstrip()) >= len(fence):
+                fence = None
+    return "\n".join(kept)
 
 
 def _table_fields(table_text: str):
