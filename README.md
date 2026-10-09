@@ -18,6 +18,22 @@ setting on this repo must allow org repositories.
 | `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs. `required-proposals.yml` posts its PR comments only when the target repo sets the variable `PROPOSAL_CHECKS_LIVE=true` | — | forwarded from the ruleset repo |
 | `slither.yml` | Advisory-only Slither static analysis for a Foundry repo (SARIF -> code-scanning annotations); never fails the job, no coverage-style gate | `slither_version`, `target` | none |
 
+### Re-running the proposal-checks AI advisory
+
+The fork test, the diff report and every other proposal-checks job run on every push. The
+forum-vs-payload AI call does not: it is skipped while the PR's advisory comment (marker
+`<!-- github-workflows-proposal-spec -->`) was updated less than 24 hours ago. This limits
+AI cost. To get a fresh advisory before the 24 hours end, for example after a failing fork
+test starts to pass:
+
+1. Delete the advisory comment on the PR.
+2. Re-run the latest `required-proposals` run from its Actions page ("Re-run all jobs").
+   `gh run rerun` returns 404 for this org-required workflow, because the workflow file
+   lives in this repo and not in the PR's repo; use the UI.
+
+With no advisory comment, the gate opens and the run posts a new comment. Do not edit the
+comment instead: an edit sets its update time to now, so the gate stays closed for 24 more hours.
+
 Board sync and the board AI jobs (PR review, issue scope, progress note, quality scan) run
 from board-app's own workflows; this repo's `ai.py` and `prompts/` are checked out there at a
 pinned ref (`GW_REF`).
