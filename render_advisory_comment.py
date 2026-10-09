@@ -120,6 +120,22 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
     return taken, [item for item in payload_items if id(item) not in taken_ids]
 
 
+def compare_around_seeds(forum_items, seed_groups, remaining_items):
+    """Compares the forum against the taken seed groups' members first, then
+    the remaining payload items against the forum items left over, so the
+    payload's event order cannot let a seed's forum items explain another
+    movement. The seed members' own `unexplained` is dropped on purpose (the
+    seed proof explains them); their warnings and notes are kept."""
+    seed_members = [member for group in seed_groups for member in group["members"]]
+    seed_cmp = spec_compare.compare(forum_items, seed_members)
+    comparison = spec_compare.compare(seed_cmp["forum_only"], remaining_items)
+    return {
+        **comparison,
+        "warnings": seed_cmp["warnings"] + comparison["warnings"],
+        "notes": seed_cmp["notes"] + comparison["notes"],
+    }
+
+
 def pair_seed_notes(seed_groups, forum_only):
     """Pairs each taken seed group with at most one unmatched forum item.
     Returns (seed_notes, remaining_forum_only); `forum_only` is not modified."""
@@ -241,7 +257,7 @@ def build(
     seed_groups, remaining_items = take_proven_listing_seeds(
         payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
     )
-    comparison = spec_compare.compare(forum_items, remaining_items)
+    comparison = compare_around_seeds(forum_items, seed_groups, remaining_items)
     readable_findings = readable_actions.build_readable_findings(
         comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels, chain
     )

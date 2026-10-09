@@ -455,5 +455,41 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertNotIn("No mismatches found", out)
 
 
+    def _seed_address_forum_items(self):
+        return [
+            {"action": "Transfer", "asset": "USDG", "amount": "150",
+             "recipient": "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000",
+             "recipient": self.DUST_BIN_ADDRESS},
+        ]
+
+    def test_forum_items_naming_the_seed_cannot_explain_another_transfer(self):
+        extra_payer = "0x4444444444444444444444444444444444444444"
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        genuine = f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        extra = f"| 19 | Transfer(from: {extra_payer}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        self.assertEqual(original.count(genuine), 1)
+        forum = json.dumps({"forum": self._seed_address_forum_items()})
+        for placement, replacement in (("before", extra + genuine), ("after", genuine + extra)):
+            with self.subTest(placement=placement):
+                out = self._build(forum, original.replace(genuine, replacement))
+                self.assertIn(self.SEED_NOTE, out)
+                self.assertIn("[!WARNING]", out)
+                warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+                self.assertIn(extra_payer, warning)
+                self.assertNotIn("No mismatches found", out)
+
+    def test_forum_items_naming_the_seed_are_not_counted_as_other_items(self):
+        deposit = json.loads(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"))["forum"]
+        forum = json.dumps({"forum": deposit + self._seed_address_forum_items()})
+        out = self._build(forum)
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.FORUM_LINE, out)
+        self.assertNotIn("other forum items", out)
+        self.assertNotIn("[!WARNING]", out)
+
+
 if __name__ == "__main__":
     unittest.main()
