@@ -264,5 +264,232 @@ class RenderPrDescriptionAlertTests(unittest.TestCase):
         self.assertIn("unticked box", out)
 
 
+class ListingSeedNoteTests(unittest.TestCase):
+    DUST_BIN_ADDRESS = "0x897c76905A3d17F71d5ea033916B65154Cf4b4f0"
+    OTHER_ADDRESS = "0x1111111111111111111111111111111111111111"
+    SEED_WARNING = "> 🟠 In payload but not in the forum post: Listing seed for USDG:"
+    SEED_NOTE = "> Listing seed (required for every new listing): Listing seed for USDG:"
+    FORUM_LINE = ">   - Forum: Deposit at least $150 USDG to Aave Short Executor"
+    NO_FORUM_LINE = ">   - Forum: no seed deposit found in the forum post"
+
+    def _build(self, forum_json, diff=None, book=ADDRESS_BOOK_SLICE):
+        diff = diff if diff is not None else _read_fixture("usdg_arbitrum_listing_diff.md")
+        return rac.build(forum_json, diff, "no scale-bound flags", "", [], book)
+
+    def test_seed_with_executor_deposit_in_forum_is_a_note_with_the_forum_side(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"))
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.FORUM_LINE, out)
+        self.assertNotIn("[!WARNING]", out)
+        self.assertNotIn("other forum items", out)
+        self.assertIn("No mismatches found", out)
+
+    def test_seed_without_executor_deposit_in_forum_is_a_note_saying_so(self):
+        out = self._build(json.dumps({"forum": []}))
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertNotIn(self.FORUM_LINE, out)
+        self.assertNotIn("[!WARNING]", out)
+
+    def test_seed_not_to_dust_bin_stays_a_warning(self):
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md").replace(
+            self.DUST_BIN_ADDRESS, self.OTHER_ADDRESS
+        )
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertIn(self.SEED_WARNING, out)
+        self.assertIn("[!WARNING]", out)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_seed_without_address_book_stays_a_warning(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), book=None)
+        self.assertIn(self.SEED_WARNING, out)
+        self.assertNotIn(self.SEED_NOTE, out)
+
+    def test_forum_deposit_of_a_different_asset_does_not_pair(self):
+        forum = json.dumps({"forum": [
+            {"action": "Deposit", "asset": "USDC", "amount": "at least $150",
+             "recipient": "Aave Short Executor", "network": "Arbitrum"}
+        ]})
+        out = self._build(forum)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_forum_deposit_to_a_non_executor_does_not_pair(self):
+        forum = json.dumps({"forum": [
+            {"action": "Deposit", "asset": "USDG", "amount": "at least $150",
+             "recipient": "TokenLogic", "network": "Arbitrum"}
+        ]})
+        out = self._build(forum)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_supply_flow_to_collector_on_existing_reserve_stays_a_warning(self):
+        diff = _read_fixture("ethereum_february2026_funding_update_diff.md")
+        out = self._build(json.dumps({"forum": []}), diff)
+        self.assertIn("> 🟠 In payload but not in the forum post: Supply flow for WETH:", out)
+        self.assertNotIn("Listing seed", out)
+
+    def test_supply_flow_to_dust_bin_on_existing_reserve_stays_a_warning(self):
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md").replace(
+            "### Reserves added", "### Reserves altered"
+        )
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertIn("> 🟠 In payload but not in the forum post: Supply flow for USDG:", out)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertNotIn("Listing seed (required for every new listing)", out)
+
+    def test_crafted_seed_with_fake_atoken_mint_stays_a_warning(self):
+        attacker = "0x2222222222222222222222222222222222222222"
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        usdg = "0x004B506865409877C9fA29bfb1ebA929984B9bbC"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md")
+        genuine = (
+            f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        )
+        self.assertIn(genuine, diff)
+        diff = diff.replace(
+            genuine,
+            genuine + f"| 19 | Transfer(from: {executor}, to: {attacker}, value: 150 [150000000, 6 decimals]) |\n",
+        )
+        diff += (
+            f"\n#### {attacker}\n\n| index | event |\n| --- | --- |\n"
+            f"| 20 | Transfer(from: 0x0000000000000000000000000000000000000000, "
+            f"to: {self.DUST_BIN_ADDRESS}, value: 150,000,000 [150000000, 0 decimals]) |\n"
+        )
+        forum = json.dumps({"forum": [
+            {"action": "Transfer", "asset": "USDG", "amount": "150", "recipient": atoken},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000", "recipient": self.DUST_BIN_ADDRESS},
+        ]})
+        out = self._build(forum, diff)
+        self.assertIn("[!WARNING]", out)
+        block = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn(attacker, block)
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertNotIn(attacker, out.split(self.SEED_NOTE, 1)[1].split("\n\n", 1)[0])
+        self.assertNotIn("No mismatches found", out)
+
+    def test_seed_with_wrong_mint_amount_stays_a_warning(self):
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        diff = original.replace(
+            "value: 150,000,000 [150000000, 0 decimals]) |\n| 17 |",
+            "value: 149,999,999 [149999999, 0 decimals]) |\n| 17 |",
+        )
+        self.assertNotEqual(diff, original)
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("[!WARNING]", out)
+
+    def test_seed_from_a_non_pool_emitter_stays_a_warning(self):
+        real_pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        fake_pool = "0x3333333333333333333333333333333333333333"
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        section = f"#### {real_pool} (AaveV3Arbitrum.POOL)"
+        spender = f"spender: {real_pool}, value: 150 [150000000, 6 decimals]"
+        self.assertIn(section, original)
+        self.assertIn(spender, original)
+        diff = original.replace(section, f"#### {fake_pool}").replace(spender, spender.replace(real_pool, fake_pool))
+        self.assertNotEqual(diff, original)
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("[!WARNING]", out)
+
+    def _two_seed_flow_diff(self):
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        zero = "0x0000000000000000000000000000000000000000"
+        value = "1,000,000 [1000000000000, 6 decimals]"
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md")
+        anchors = {
+            "atoken": "| 17 | Mint(caller",
+            "pool": "\n#### 0x004B506865409877C9fA29bfb1ebA929984B9bbC\n",
+            "usdg": f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n",
+        }
+        for anchor in anchors.values():
+            self.assertEqual(diff.count(anchor), 1)
+        diff = diff.replace(
+            anchors["usdg"],
+            anchors["usdg"]
+            + f"| 21 | Approval(owner: {executor}, spender: {pool}, value: {value}) |\n"
+            + f"| 23 | Transfer(from: {executor}, to: {atoken}, value: {value}) |\n",
+        )
+        mint_row = next(line for line in diff.splitlines() if line.startswith(anchors["atoken"]))
+        diff = diff.replace(
+            mint_row + "\n",
+            mint_row + "\n"
+            + f"| 24 | Transfer(from: {zero}, to: {self.DUST_BIN_ADDRESS}, value: 1,000,000,000,000 [1000000000000, 0 decimals]) |\n",
+        )
+        supply_row = next(line for line in diff.splitlines() if line.startswith("| 18 | Supply("))
+        diff = diff.replace(
+            supply_row + "\n",
+            supply_row + "\n"
+            + supply_row.replace("| 18 |", "| 22 |").replace("amount: 150 [150000000, 6 decimals]", f"amount: {value}")
+            + "\n",
+        )
+        return diff
+
+    def test_second_seed_supply_of_the_same_reserve_stays_a_warning(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), self._two_seed_flow_diff())
+        self.assertEqual(out.count(self.SEED_NOTE), 0)
+        warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("1,000,000", warning)
+        self.assertNotIn("No mismatches found", out)
+
+    def test_forum_that_explains_the_genuine_seed_cannot_promote_a_second_seed(self):
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        usdg = "0x004B506865409877C9fA29bfb1ebA929984B9bbC"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        forum = json.dumps({"forum": [
+            {"action": "Approve", "asset": "USDG", "amount": "150", "recipient": pool},
+            {"action": "Supply", "asset": "USDG", "amount": "150", "recipient": usdg},
+            {"action": "Transfer", "asset": "USDG", "amount": "150", "recipient": atoken},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000", "recipient": self.DUST_BIN_ADDRESS},
+        ]})
+        out = self._build(forum, self._two_seed_flow_diff())
+        self.assertEqual(out.count(self.SEED_NOTE), 0)
+        warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("1,000,000", warning)
+        self.assertNotIn("No mismatches found", out)
+
+
+    def _seed_address_forum_items(self):
+        return [
+            {"action": "Transfer", "asset": "USDG", "amount": "150",
+             "recipient": "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000",
+             "recipient": self.DUST_BIN_ADDRESS},
+        ]
+
+    def test_forum_items_naming_the_seed_cannot_explain_another_transfer(self):
+        extra_payer = "0x4444444444444444444444444444444444444444"
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        genuine = f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        extra = f"| 19 | Transfer(from: {extra_payer}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        self.assertEqual(original.count(genuine), 1)
+        forum = json.dumps({"forum": self._seed_address_forum_items()})
+        for placement, replacement in (("before", extra + genuine), ("after", genuine + extra)):
+            with self.subTest(placement=placement):
+                out = self._build(forum, original.replace(genuine, replacement))
+                self.assertIn(self.SEED_NOTE, out)
+                self.assertIn("[!WARNING]", out)
+                warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+                self.assertIn(extra_payer, warning)
+                self.assertNotIn("No mismatches found", out)
+
+    def test_forum_items_naming_the_seed_are_not_counted_as_other_items(self):
+        deposit = json.loads(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"))["forum"]
+        forum = json.dumps({"forum": deposit + self._seed_address_forum_items()})
+        out = self._build(forum)
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.FORUM_LINE, out)
+        self.assertNotIn("other forum items", out)
+        self.assertNotIn("[!WARNING]", out)
+
+
 if __name__ == "__main__":
     unittest.main()

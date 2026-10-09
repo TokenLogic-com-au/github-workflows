@@ -203,8 +203,8 @@ def _is_interest_accrual(transfer_line: str, transfer_raw: str, lines: list, idx
 
 
 def parse_payload_actions(diff_report_text: str):
-    """Returns a list of {"action", "asset", "amount", "decimals",
-    "recipient", "network", "raw_line"} extracted from decoded value lines.
+    """Returns a list of {"action", "asset", "amount", "raw_amount",
+    "decimals", "recipient", "network", "raw_line"} extracted from decoded value lines.
 
     NOT deduped on value (raw/decimals/recipient/token/sender): the events
     alone cannot tell a plain `transfer()` from the `transferFrom` it might
@@ -250,6 +250,7 @@ def parse_payload_actions(diff_report_text: str):
                 "action": "Approve" if kind == "approval" else "Transfer",
                 "asset": None,
                 "amount": m.group("human"),
+                "raw_amount": m.group("raw"),
                 "decimals": int(m.group("decimals")),
                 "recipient": recipient,
                 "network": None,

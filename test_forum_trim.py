@@ -12,10 +12,10 @@ class TrimToSpecificationTests(unittest.TestCase):
         self.assertEqual(ft.trim_to_specification("   "), "   ")
 
     def test_no_matching_heading_falls_back_to_full_text(self):
-        text = "# Summary\nsome text\n# Next Steps\nmore text\n"
+        text = "# Summary\nsome text\n# Oracle\nmore text\n"
         self.assertEqual(ft.trim_to_specification(text), text)
 
-    def test_keeps_motivation_through_specification_drops_summary_and_next_steps(self):
+    def test_keeps_motivation_through_specification_drops_summary_and_copyright(self):
         text = (
             "# Summary\nirrelevant preamble\n"
             "# Motivation\nwhy this matters\n"
@@ -29,7 +29,7 @@ class TrimToSpecificationTests(unittest.TestCase):
         self.assertIn("why this matters", out)
         self.assertIn("Reimburse Audit Costs", out)
         self.assertIn("details here", out)
-        self.assertNotIn("submit AIP", out)
+        self.assertIn("submit AIP", out)
         self.assertNotIn("CC0", out)
 
     def test_specification_only_no_motivation(self):
@@ -45,7 +45,7 @@ class TrimToSpecificationTests(unittest.TestCase):
             "## Ethereum\nsection a\n"
             "### Runway\nsection b\n"
             "## Plasma\nsection c\n"
-            "# Next Steps\nend\n"
+            "# Oracle\nend\n"
         )
         out = ft.trim_to_specification(text)
         self.assertIn("section a", out)
@@ -62,6 +62,29 @@ class TrimToSpecificationTests(unittest.TestCase):
         text = "# Summary\nx\n# Specification\ndetails to the end\n"
         out = ft.trim_to_specification(text)
         self.assertIn("details to the end", out)
+
+
+class NextStepsTests(unittest.TestCase):
+    def test_listing_post_keeps_motivation_specification_next_steps_drops_the_rest(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures",
+                            "usdg_arbitrum_listing_forum_post.txt")
+        with open(path, encoding="utf-8") as f:
+            out = ft.trim_to_specification(f.read())
+        for kept in ("# Motivation", "# Specification", "# Next Steps", "Deposit at least $150"):
+            self.assertIn(kept, out)
+        for dropped in ("# Oracle", "# Disclaimer", "# Copyright", "# Summary", "Chainlink"):
+            self.assertNotIn(dropped, out)
+
+    def test_nested_wanted_heading_does_not_duplicate_text(self):
+        text = "# Specification\nouter\n## Next Steps\ninner\n# Other\nx\n"
+        out = ft.trim_to_specification(text)
+        self.assertEqual(out.count("inner"), 1)
+        self.assertEqual(out.count("outer"), 1)
+        self.assertNotIn("# Other", out)
+
+    def test_next_steps_alone_never_replaces_an_unrecognised_specification(self):
+        text = "Specification\n=============\nTransfer 100 GHO to Alice.\n# Next Steps\nSubmit AIP.\n"
+        self.assertEqual(ft.trim_to_specification(text), text)
 
 
 if __name__ == "__main__":

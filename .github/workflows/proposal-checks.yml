@@ -459,7 +459,7 @@ jobs:
         if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
         with:
           python-version: "3.12"
-      - name: Trim forum text to its Specification/Motivation section(s)
+      - name: Trim forum text to its Motivation/Specification/Next Steps section(s)
         if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
         run: |
           # Cuts token usage on long funding-update posts that cover many
@@ -493,8 +493,18 @@ jobs:
           # would block a merge on the AI provider's flakiness, not on anything
           # about the proposal. Log the failure into the comment instead.
           if ! python3 "$GW/ai.py" spec-check input.txt ai-out.md; then
-            echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ../ai-out.md
+            echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ai-out.md
           fi
+      - name: Print spec-check AI output
+        if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::group::spec-check AI output"
+          echo "::stop-commands::$token"
+          cat ai-out.md
+          echo
+          echo "::$token::"
+          echo "::endgroup::"
       - name: Deterministic decimals-scale check
         if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
         run: |

@@ -181,5 +181,17 @@ class FormulaAmountTests(unittest.TestCase):
         self.assertEqual(out["warnings"], [])
 
 
+class ForumOnlyTests(unittest.TestCase):
+    def test_returns_unmatched_forum_items_and_count_equals_their_length(self):
+        matched = {"action": "Reimburse", "asset": "GHO", "amount": "5",
+                   "recipient": "TL 0xAA088dfF3dcF619664094945028d44E779F19894"}
+        stray = {"action": "Deposit", "asset": "USDG", "amount": "at least $150",
+                 "recipient": "Aave Short Executor"}
+        payload = [{"amount": "5", "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894"}]
+        out = sc.compare([matched, stray], payload)
+        self.assertEqual(out["forum_only"], [stray])
+        self.assertEqual(out["forum_only_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

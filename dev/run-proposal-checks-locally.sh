@@ -53,8 +53,16 @@ if [ -z "$DIFF_FILE" ] && [ -n "${RPC_MAINNET:-}" ]; then
   forge test --match-path "${PROPOSAL_DIR}/*.t.sol" --isolate -vv || true
   DIFF_FILE=$(find diffs -name "*${PROPOSAL_NAME}*.md" 2>/dev/null | sort | tail -1 || true)
 fi
-DIFF_FILE="${DIFF_FILE:-/dev/null}"
+if [ -n "$DIFF_FILE" ]; then
+  DIFF_FILE="$PWD/$DIFF_FILE"
+else
+  DIFF_FILE=/dev/null
+fi
 echo "using diff report: $DIFF_FILE" >&2
+
+echo "== forum trim ==" >&2
+python3 "$WORKFLOWS_DIR/forum_trim.py" "$FORUM_FILE" > "$OUT_DIR/forum.trimmed.txt"
+mv "$OUT_DIR/forum.trimmed.txt" "$FORUM_FILE"
 
 echo "== spec-check AI call ==" >&2
 {

@@ -142,7 +142,7 @@ class ListingSeedGroupingTests(unittest.TestCase):
         text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
         items = dp.parse_payload_actions(text)
         label_map, symbol_map = ab.build_maps(text)
-        new_reserves = ab.new_reserve_symbols(text)
+        new_reserves = ab.new_reserves(text)
         findings = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
 
         # The report's ReserveDataUpdated line for this reserve fires
@@ -169,8 +169,8 @@ class ListingSeedGroupingTests(unittest.TestCase):
         text = _read_fixture("ethereum_february2026_funding_update_diff.md")
         items = dp.parse_payload_actions(text)
         label_map, symbol_map = ab.build_maps(text)
-        new_reserves = ab.new_reserve_symbols(text)
-        self.assertEqual(new_reserves, set())
+        new_reserves = ab.new_reserves(text)
+        self.assertEqual(new_reserves, {})
         findings = ra.build_readable_findings(items, label_map, symbol_map, new_reserves)
         seed = next(f for f in findings if f["sub_lines"])
         self.assertTrue(seed["line"].startswith("Supply flow for WETH:"))

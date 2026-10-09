@@ -418,19 +418,37 @@ class DescribeAddressTests(unittest.TestCase):
         self.assertEqual(ab.describe_address(None, {}, {}), "unknown address")
 
 
-class NewReserveSymbolsTests(unittest.TestCase):
-    def test_empty_text_returns_empty_set(self):
-        self.assertEqual(ab.new_reserve_symbols(""), set())
+class NewReservesTests(unittest.TestCase):
+    def test_empty_text_returns_empty_dict(self):
+        self.assertEqual(ab.new_reserves(""), {})
 
     def test_reserve_under_reserves_added_is_new(self):
         text = (
             "## Reserve changes\n\n"
             "### Reserves added\n\n"
             "#### PT-AUSD-17DEC2026 ([0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57](https://x))\n\n"
+            "| description | value |\n| --- | --- |\n| id | 13 |\n"
+            "| aToken | [0x8F8d143F1FCe0A57A6e80D8DF7f7288703b2Eb7e](https://x) |\n\n"
+            "## EMode changes\n"
+        )
+        self.assertEqual(
+            ab.new_reserves(text),
+            {
+                "0x8b562578b2f9aa8c14ccda3c5d6cbcead3b06a57": {
+                    "symbol": "PT-AUSD-17DEC2026",
+                    "a_token": "0x8f8d143f1fce0a57a6e80d8df7f7288703b2eb7e",
+                }
+            },
+        )
+
+    def test_reserve_without_an_atoken_row_is_left_out(self):
+        text = (
+            "### Reserves added\n\n"
+            "#### PT-AUSD-17DEC2026 ([0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57](https://x))\n\n"
             "| description | value |\n| --- | --- |\n| id | 13 |\n\n"
             "## EMode changes\n"
         )
-        self.assertEqual(ab.new_reserve_symbols(text), {"PT-AUSD-17DEC2026"})
+        self.assertEqual(ab.new_reserves(text), {})
 
     def test_reserve_under_reserves_changed_is_not_new(self):
         text = (
@@ -439,11 +457,11 @@ class NewReserveSymbolsTests(unittest.TestCase):
             "#### WETH ([0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2](https://x))\n\n"
             "| description | value before | value after |\n| --- | --- | --- |\n"
         )
-        self.assertEqual(ab.new_reserve_symbols(text), set())
+        self.assertEqual(ab.new_reserves(text), {})
 
     def test_full_pr231_fixture_reports_the_listed_pt_as_new(self):
         text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md")
-        self.assertEqual(ab.new_reserve_symbols(text), {"PT-AUSD-17DEC2026"})
+        self.assertEqual({v["symbol"] for v in ab.new_reserves(text).values()}, {"PT-AUSD-17DEC2026"})
 
 
 PT_AUSD_UNDERLYING = "0x8B562578b2f9Aa8C14cCda3c5d6CBCEaD3B06a57"
@@ -566,7 +584,7 @@ class PendingListingMessageTests(unittest.TestCase):
         text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md") + "\n" + fabricated
         for addr in ("0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"):
             self.assertIsNone(ab.pending_listing_message(text, addr))
-        self.assertEqual(ab.new_reserve_symbols(text), {"PT-AUSD-17DEC2026"})
+        self.assertEqual({v["symbol"] for v in ab.new_reserves(text).values()}, {"PT-AUSD-17DEC2026"})
 
     def test_pool_label_inside_a_code_fence_does_not_name_the_library(self):
         text = _read_fixture("pt_ausd_17dec2026_monad_listing_diff.md").replace(
@@ -653,6 +671,25 @@ class PendingListingCliTests(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
         r = self._run("does_not_exist.md", PT_AUSD_ORACLE)
         self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
+class NamesBookConstantTests(unittest.TestCase):
+    DUST_BIN = "0x897c76905A3d17F71d5ea033916B65154Cf4b4f0"
+    POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+
+    def setUp(self):
+        self.book = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+
+    def test_names_the_constant_it_is(self):
+        self.assertTrue(ab.names_book_constant(self.DUST_BIN, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
+        self.assertTrue(ab.names_book_constant(self.POOL, self.book, "Arbitrum", ab.POOL_CONSTANT))
+
+    def test_does_not_name_a_different_constant(self):
+        self.assertFalse(ab.names_book_constant(self.POOL, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
+
+    def test_no_book_or_no_address_is_false(self):
+        self.assertFalse(ab.names_book_constant(self.DUST_BIN, {}, "Arbitrum", ab.DUST_BIN_CONSTANT))
+        self.assertFalse(ab.names_book_constant(None, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
 
 
 if __name__ == "__main__":
