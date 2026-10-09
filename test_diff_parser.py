@@ -19,6 +19,13 @@ class ParsePayloadActionsTests(unittest.TestCase):
         self.assertEqual(out[0]["decimals"], 18)
         self.assertEqual(out[0]["recipient"], "0xAA088dfF3dcF619664094945028d44E779F19894")
 
+    def test_supply_item_carries_the_raw_amount(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures", "usdg_arbitrum_listing_diff.md")
+        with open(path, encoding="utf-8") as f:
+            items = dp.parse_payload_actions(f.read())
+        supply = next(it for it in items if it["event_name"] == "Supply")
+        self.assertEqual(supply["raw_amount"], "150000000")
+
     def test_ignores_lines_without_decoded_value(self):
         text = "some unrelated line\nanother line with no brackets"
         self.assertEqual(dp.parse_payload_actions(text), [])

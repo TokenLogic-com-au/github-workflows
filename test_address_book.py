@@ -673,5 +673,24 @@ class PendingListingCliTests(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
 
+class NamesBookConstantTests(unittest.TestCase):
+    DUST_BIN = "0x897c76905A3d17F71d5ea033916B65154Cf4b4f0"
+    POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+
+    def setUp(self):
+        self.book = ab.load_solidity_labels(ADDRESS_BOOK_SLICE)
+
+    def test_names_the_constant_it_is(self):
+        self.assertTrue(ab.names_book_constant(self.DUST_BIN, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
+        self.assertTrue(ab.names_book_constant(self.POOL, self.book, "Arbitrum", ab.POOL_CONSTANT))
+
+    def test_does_not_name_a_different_constant(self):
+        self.assertFalse(ab.names_book_constant(self.POOL, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
+
+    def test_no_book_or_no_address_is_false(self):
+        self.assertFalse(ab.names_book_constant(self.DUST_BIN, {}, "Arbitrum", ab.DUST_BIN_CONSTANT))
+        self.assertFalse(ab.names_book_constant(None, self.book, "Arbitrum", ab.DUST_BIN_CONSTANT))
+
+
 if __name__ == "__main__":
     unittest.main()

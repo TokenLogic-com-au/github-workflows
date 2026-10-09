@@ -5,4 +5,7 @@ pragma solidity >=0.6.0;
 library AaveV3Arbitrum {
   // https://arbiscan.io/address/0x897c76905A3d17F71d5ea033916B65154Cf4b4f0
   address internal constant DUST_BIN = 0x897c76905A3d17F71d5ea033916B65154Cf4b4f0;
+
+  // https://arbiscan.io/address/0x794a61358D6845594F94dc1DB02A252b5b4814aD
+  address internal constant POOL = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
 }

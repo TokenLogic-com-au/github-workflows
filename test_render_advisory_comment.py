@@ -383,5 +383,58 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertIn("[!WARNING]", out)
 
 
+    def test_seed_from_a_non_pool_emitter_stays_a_warning(self):
+        real_pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        fake_pool = "0x3333333333333333333333333333333333333333"
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        section = f"#### {real_pool} (AaveV3Arbitrum.POOL)"
+        spender = f"spender: {real_pool}, value: 150 [150000000, 6 decimals]"
+        self.assertIn(section, original)
+        self.assertIn(spender, original)
+        diff = original.replace(section, f"#### {fake_pool}").replace(spender, spender.replace(real_pool, fake_pool))
+        self.assertNotEqual(diff, original)
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("[!WARNING]", out)
+
+    def test_second_seed_supply_of_the_same_reserve_stays_a_warning(self):
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        zero = "0x0000000000000000000000000000000000000000"
+        value = "1,000,000 [1000000000000, 6 decimals]"
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md")
+        anchors = {
+            "atoken": "| 17 | Mint(caller",
+            "pool": "\n#### 0x004B506865409877C9fA29bfb1ebA929984B9bbC\n",
+            "usdg": f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n",
+        }
+        for anchor in anchors.values():
+            self.assertEqual(diff.count(anchor), 1)
+        diff = diff.replace(
+            anchors["usdg"],
+            anchors["usdg"]
+            + f"| 21 | Approval(owner: {executor}, spender: {pool}, value: {value}) |\n"
+            + f"| 23 | Transfer(from: {executor}, to: {atoken}, value: {value}) |\n",
+        )
+        mint_row = next(line for line in diff.splitlines() if line.startswith(anchors["atoken"]))
+        diff = diff.replace(
+            mint_row + "\n",
+            mint_row + "\n"
+            + f"| 24 | Transfer(from: {zero}, to: {self.DUST_BIN_ADDRESS}, value: 1,000,000,000,000 [1000000000000, 0 decimals]) |\n",
+        )
+        supply_row = next(line for line in diff.splitlines() if line.startswith("| 18 | Supply("))
+        diff = diff.replace(
+            supply_row + "\n",
+            supply_row + "\n"
+            + supply_row.replace("| 18 |", "| 22 |").replace("amount: 150 [150000000, 6 decimals]", f"amount: {value}")
+            + "\n",
+        )
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertEqual(out.count(self.SEED_NOTE), 1)
+        warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("1,000,000", warning)
+
+
 if __name__ == "__main__":
     unittest.main()

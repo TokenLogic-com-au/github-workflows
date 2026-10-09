@@ -95,19 +95,30 @@ def _forum_seed_line(forum_item) -> str:
 
 def split_listing_seeds(readable_findings, forum_only, solidity_labels, chain):
     """Splits out the listing seeds the address book proves go to the
-    instance's DUST_BIN (the seed every new listing requires) and pairs each
-    with at most one unmatched forum item. Returns (remaining_findings,
+    instance's DUST_BIN through the instance's POOL (the seed every new
+    listing requires), at most one per new reserve (a later seed of the same
+    reserve stays a warning), and pairs each with at most one unmatched
+    forum item. Returns (remaining_findings,
     seed_notes, remaining_forum_only); `forum_only` is not modified. Without
     an address book nothing is split out, so every seed stays a warning."""
     forum_left = list(forum_only)
     remaining, seed_notes = [], []
+    noted_reserves = set()
     for finding in readable_findings:
-        is_seed_to_dust_bin = finding.get("kind") == readable_actions.LISTING_SEED_KIND and (
-            address_book.is_dust_bin(finding.get("beneficiary"), solidity_labels, chain)
+        is_proven_seed = (
+            finding.get("kind") == readable_actions.LISTING_SEED_KIND
+            and finding.get("reserve") not in noted_reserves
+            and address_book.names_book_constant(
+                finding.get("beneficiary"), solidity_labels, chain, address_book.DUST_BIN_CONSTANT
+            )
+            and address_book.names_book_constant(
+                finding.get("pool"), solidity_labels, chain, address_book.POOL_CONSTANT
+            )
         )
-        if not is_seed_to_dust_bin:
+        if not is_proven_seed:
             remaining.append(finding)
             continue
+        noted_reserves.add(finding["reserve"])
         paired = spec_compare.pop_seed_forum_item(forum_left, finding.get("asset_symbol"))
         seed_notes.append({**finding, "forum_line": _forum_seed_line(paired)})
     return remaining, seed_notes, forum_left
