@@ -4,14 +4,17 @@ token usage on long funding-update posts that cover many payloads, while
 keeping the seed-deposit sentence a listing post states under Next Steps.
 Each wanted heading starts a section that runs to the next heading of the
 same or higher level; the sections are joined in document order, and a
-wanted heading nested inside another wanted section is not repeated. Falls
-back to the full post when no matching heading is found, so a
-differently-formatted post is never silently truncated to nothing.
+wanted heading nested inside another wanted section is not repeated. Next
+Steps is only an addition: the full post is returned unless a Motivation or
+Specification heading is found, so a differently-formatted post is never
+silently truncated.
 """
 import re
 
 HEADING_RE = re.compile(r"^(#{1,6})\s*(.*)$", re.MULTILINE)
-WANTED_NAMES = ("motivation", "specification", "next steps")
+CORE_NAMES = ("motivation", "specification")
+EXTRA_NAME = "next steps"
+WANTED_NAMES = CORE_NAMES + (EXTRA_NAME,)
 
 
 def trim_to_specification(forum_text: str) -> str:
@@ -28,8 +31,9 @@ def trim_to_specification(forum_text: str) -> str:
         sections.append(forum_text[start:end].strip())
         covered_until = end
 
-    trimmed = "\n\n".join(section for section in sections if section)
-    return trimmed if trimmed else forum_text
+    if not any(name.startswith(CORE_NAMES) for _, _, name in headings):
+        return forum_text
+    return "\n\n".join(section for section in sections if section)
 
 
 if __name__ == "__main__":

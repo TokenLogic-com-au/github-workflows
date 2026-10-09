@@ -216,13 +216,13 @@ def build(
 
     comparison = spec_compare.compare(forum_items, payload_items)
     label_map, symbol_map = address_book.build_maps(diff_report_text)
-    new_reserve_symbols = address_book.new_reserve_symbols(diff_report_text)
+    new_reserves = address_book.new_reserves(diff_report_text)
     # A missing/empty address_book_root degrades to {} (no book) rather than
     # raising -- callers that don't pass one at all get today's behaviour.
     solidity_labels = address_book.load_solidity_labels(address_book_root)
     chain = address_book.infer_chain(diff_report_text)
     readable_findings = readable_actions.build_readable_findings(
-        comparison["unexplained"], label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
+        comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels, chain
     )
     readable_findings, seed_notes, forum_only = split_listing_seeds(
         readable_findings, comparison["forum_only"], solidity_labels, chain

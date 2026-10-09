@@ -11,6 +11,7 @@ by design (the caller reports its count separately, see
 diff_parser.count_reserve_data_updates).
 """
 from address_book import describe_address
+from diff_parser import DECODED_VALUE_RE
 
 LISTING_SEED_KIND = "Listing seed"
 SUPPLY_FLOW_KIND = "Supply flow"
@@ -19,6 +20,11 @@ ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 def _is_zero_address(addr):
     return bool(addr) and addr.lower() == ZERO_ADDRESS
+
+
+def _raw_amount(item):
+    m = DECODED_VALUE_RE.search(item.get("raw_line") or "")
+    return m.group("raw") if m else None
 
 
 def _token_symbol(item, symbol_map):
@@ -88,7 +94,7 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
 
 
 def _find_listing_seed_groups(
-    items, label_map, symbol_map, new_reserve_symbols=frozenset(), solidity_labels=None, chain=None
+    items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
     """A seed flow is: a Supply, on behalf of some beneficiary, paid for by
     a payer (the Supply's own `user` field) -- matched to:
@@ -131,6 +137,7 @@ def _find_listing_seed_groups(
         if not reserve_addr or not pool_addr or not beneficiary or not payer:
             continue
         payer_lower = payer.lower()
+        listing = (new_reserves or {}).get(reserve_addr)
 
         approval = next(
             (
@@ -156,6 +163,7 @@ def _find_listing_seed_groups(
                 and it.get("counterparty")
                 and it["counterparty"].lower() == payer_lower
                 and it.get("amount") == supply_amount
+                and (not listing or (it.get("recipient") or "").lower() == listing["a_token"])
             ),
             None,
         )
@@ -171,6 +179,7 @@ def _find_listing_seed_groups(
                 and (it.get("section") or "").lower() == atoken_addr
                 and _is_zero_address(it.get("counterparty"))
                 and it.get("recipient") == beneficiary
+                and (not listing or _raw_amount(it) == _raw_amount(supply))
             ),
             None,
         )
@@ -181,12 +190,15 @@ def _find_listing_seed_groups(
         for member in members:
             used_ids.add(id(member))
 
-        reserve_symbol = _token_symbol(supply, symbol_map) or describe_address(
-            reserve_addr, label_map, symbol_map, solidity_labels, chain
+        reserve_symbol = (
+            listing["symbol"]
+            if listing
+            else _token_symbol(supply, symbol_map)
+            or describe_address(reserve_addr, label_map, symbol_map, solidity_labels, chain)
         )
         payer_label = describe_address(payer, label_map, symbol_map, solidity_labels, chain)
         beneficiary_label = describe_address(beneficiary, label_map, symbol_map, solidity_labels, chain)
-        kind = LISTING_SEED_KIND if reserve_symbol in new_reserve_symbols else SUPPLY_FLOW_KIND
+        kind = LISTING_SEED_KIND if listing else SUPPLY_FLOW_KIND
         summary = (
             f"{kind} for {reserve_symbol}: {payer_label} supplies "
             f"{_amount_text(supply, symbol_map)} on behalf of {beneficiary_label}, "
@@ -208,7 +220,7 @@ def _find_listing_seed_groups(
 
 
 def build_readable_findings(
-    items, label_map, symbol_map, new_reserve_symbols=frozenset(), solidity_labels=None, chain=None
+    items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
     """Returns [{"line": str, "sub_lines": [str, ...]}] (a seed group also
     carries "kind", "asset_symbol" and "beneficiary") covering every item
@@ -222,7 +234,7 @@ def build_readable_findings(
     everything else (including any event outside the recognized patterns)
     gets its own single-line description."""
     seed_groups = _find_listing_seed_groups(
-        items, label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
+        items, label_map, symbol_map, new_reserves, solidity_labels, chain
     )
     grouped_ids = {id(member) for group in seed_groups for member in group["members"]}
     findings = [

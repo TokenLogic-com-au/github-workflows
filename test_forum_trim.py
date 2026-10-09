@@ -82,6 +82,10 @@ class NextStepsTests(unittest.TestCase):
         self.assertEqual(out.count("outer"), 1)
         self.assertNotIn("# Other", out)
 
+    def test_next_steps_alone_never_replaces_an_unrecognised_specification(self):
+        text = "Specification\n=============\nTransfer 100 GHO to Alice.\n# Next Steps\nSubmit AIP.\n"
+        self.assertEqual(ft.trim_to_specification(text), text)
+
 
 if __name__ == "__main__":
     unittest.main()

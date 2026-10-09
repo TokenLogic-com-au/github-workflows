@@ -97,8 +97,9 @@ _TABLE_ROW_RE = re.compile(
 _ASSET_LABEL_RE = re.compile(r"^[\w]+\.ASSETS\.([A-Za-z0-9_.]+)\.([A-Z_]+)$")
 _EXECUTOR_LVL_RE = re.compile(r"EXECUTOR_LVL_\d+$")
 
+A_TOKEN_FIELD = "aToken"
 _RESERVE_TOKEN_FIELDS = (
-    ("aToken", "aTokenSymbol"),
+    (A_TOKEN_FIELD, "aTokenSymbol"),
     ("variableDebtToken", "variableDebtTokenSymbol"),
     ("stableDebtToken", "stableDebtTokenSymbol"),
 )
@@ -256,13 +257,19 @@ def _added_reserves(diff_report_text: str):
                 yield safe, underlying.lower(), _table_fields(table_text)
 
 
-def new_reserve_symbols(diff_report_text: str):
-    """The symbols of every reserve listed under a "### Reserves added"
-    section -- used to tell a genuine new-listing seed apart from an
-    ordinary supply into an already-existing reserve (e.g. a funding
-    update's Collector deposit), which shares the exact same
-    approve/supply/mint event shape."""
-    return {symbol for symbol, _underlying, _fields in _added_reserves(diff_report_text)}
+def new_reserves(diff_report_text: str):
+    """{underlying_lower: {"symbol", "a_token"}} for every reserve listed
+    under a "### Reserves added" section that names its aToken -- used to
+    tell a genuine new-listing seed apart from an ordinary supply into an
+    already-existing reserve (e.g. a funding update's Collector deposit),
+    which shares the exact same approve/supply/mint event shape, and to pin
+    the seed's underlying Transfer to the reserve's own aToken. A reserve
+    with no aToken row can never be a proven listing seed and is left out."""
+    return {
+        underlying: {"symbol": symbol, "a_token": fields[A_TOKEN_FIELD]}
+        for symbol, underlying, fields in _added_reserves(diff_report_text)
+        if _ADDR_RE.match(fields.get(A_TOKEN_FIELD, ""))
+    }
 
 
 # aave-address-book's generator (scripts/generator/utils.ts keyToVar) turns

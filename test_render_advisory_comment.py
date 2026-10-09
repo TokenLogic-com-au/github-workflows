@@ -340,5 +340,48 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertNotIn("Listing seed (required for every new listing)", out)
 
 
+    def test_crafted_seed_with_fake_atoken_mint_stays_a_warning(self):
+        attacker = "0x2222222222222222222222222222222222222222"
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        usdg = "0x004B506865409877C9fA29bfb1ebA929984B9bbC"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md")
+        genuine = (
+            f"| 15 | Transfer(from: {executor}, to: {atoken}, value: 150 [150000000, 6 decimals]) |\n"
+        )
+        self.assertIn(genuine, diff)
+        diff = diff.replace(
+            genuine,
+            genuine + f"| 19 | Transfer(from: {executor}, to: {attacker}, value: 150 [150000000, 6 decimals]) |\n",
+        )
+        diff += (
+            f"\n#### {attacker}\n\n| index | event |\n| --- | --- |\n"
+            f"| 20 | Transfer(from: 0x0000000000000000000000000000000000000000, "
+            f"to: {self.DUST_BIN_ADDRESS}, value: 150,000,000 [150000000, 0 decimals]) |\n"
+        )
+        forum = json.dumps({"forum": [
+            {"action": "Transfer", "asset": "USDG", "amount": "150", "recipient": atoken},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000", "recipient": self.DUST_BIN_ADDRESS},
+        ]})
+        out = self._build(forum, diff)
+        self.assertIn("[!WARNING]", out)
+        block = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn(attacker, block)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertNotIn("No mismatches found", out)
+
+
+    def test_seed_with_wrong_mint_amount_stays_a_warning(self):
+        original = _read_fixture("usdg_arbitrum_listing_diff.md")
+        diff = original.replace(
+            "value: 150,000,000 [150000000, 0 decimals]) |\n| 17 |",
+            "value: 149,999,999 [149999999, 0 decimals]) |\n| 17 |",
+        )
+        self.assertNotEqual(diff, original)
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("[!WARNING]", out)
+
+
 if __name__ == "__main__":
     unittest.main()
