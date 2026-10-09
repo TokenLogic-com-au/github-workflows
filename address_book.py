@@ -512,6 +512,16 @@ def _describe_from_solidity_book(addr, solidity_labels, chain):
     return f"{library_name}.{const_name}"
 
 
+DUST_BIN_CONSTANT = "DUST_BIN"
+
+
+def is_dust_bin(addr, solidity_labels, chain):
+    """True when the address book names `addr` the DUST_BIN of `chain`'s
+    instance. False for anything else, including an absent book."""
+    label = _describe_from_solidity_book(addr, solidity_labels, chain) if addr else None
+    return bool(label) and label.endswith(f".{DUST_BIN_CONSTANT}")
+
+
 def describe_address(addr, label_map, symbol_map, solidity_labels=None, chain=None):
     """Renders a party as `` `Label` (0xFullAddress) `` when any naming
     source knows it, or the full, unshortened checksummed address

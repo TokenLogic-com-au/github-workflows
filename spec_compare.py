@@ -7,7 +7,7 @@ list (diff_parser.parse_payload_actions) and produces:
 - unexplained: payload item with NO forum counterpart at all -- the
   dangerous case (rendered [!WARNING], 🟠, as a plain-language finding via
   readable_actions.py rather than a raw amount/recipient line)
-- forum_only_count: forum items with no payload counterpart -- expected
+- forum_only / forum_only_count: forum items with no payload counterpart -- expected
   noise when a forum post covers a whole funding update split across many
   payloads, rendered as one neutral collapsed line, never a warning.
 - notes: payload item matched to a forum item whose amount is a formula
@@ -20,6 +20,7 @@ No network call, no AI: this is the part that must be exactly reproducible.
 """
 import re
 
+SEED_RECIPIENT_MARKER = "executor"
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 # An arithmetic operator only counts as formula evidence when it has
 # whitespace on both sides -- " + ", " - ", " * ", " / ", " x ", " × " --
@@ -118,10 +119,25 @@ def compare(forum_items, payload_items):
         if mismatch:
             warnings.append({"label": label, "detail": "; ".join(detail)})
 
-    forum_only_count = len(forum_items) - len(matched_forum_idxs)
+    forum_only = [f for i, f in enumerate(forum_items) if i not in matched_forum_idxs]
     return {
         "warnings": warnings,
         "unexplained": unexplained,
         "notes": notes,
-        "forum_only_count": max(forum_only_count, 0),
+        "forum_only": forum_only,
+        "forum_only_count": len(forum_only),
     }
+
+
+def pop_seed_forum_item(forum_only, asset_symbol):
+    """Removes and returns the first unmatched forum item that deposits
+    `asset_symbol` to an executor (the forum's wording of a listing seed,
+    which names no address), or None. Amounts are never compared: the forum
+    states them in USD, the payload in tokens."""
+    wanted = (asset_symbol or "").casefold()
+    for i, f in enumerate(forum_only):
+        if (f.get("asset") or "").casefold() == wanted and SEED_RECIPIENT_MARKER in (
+            f.get("recipient") or ""
+        ).casefold():
+            return forum_only.pop(i)
+    return None

@@ -264,5 +264,81 @@ class RenderPrDescriptionAlertTests(unittest.TestCase):
         self.assertIn("unticked box", out)
 
 
+class ListingSeedNoteTests(unittest.TestCase):
+    DUST_BIN_ADDRESS = "0x897c76905A3d17F71d5ea033916B65154Cf4b4f0"
+    OTHER_ADDRESS = "0x1111111111111111111111111111111111111111"
+    SEED_WARNING = "> 🟠 In payload but not in the forum post: Listing seed for USDG:"
+    SEED_NOTE = "> Listing seed (required for every new listing): Listing seed for USDG:"
+    FORUM_LINE = ">   - Forum: Deposit at least $150 USDG to Aave Short Executor"
+    NO_FORUM_LINE = ">   - Forum: no seed deposit found in the forum post"
+
+    def _build(self, forum_json, diff=None, book=ADDRESS_BOOK_SLICE):
+        diff = diff if diff is not None else _read_fixture("usdg_arbitrum_listing_diff.md")
+        return rac.build(forum_json, diff, "no scale-bound flags", "", [], book)
+
+    def test_seed_with_executor_deposit_in_forum_is_a_note_with_the_forum_side(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"))
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.FORUM_LINE, out)
+        self.assertNotIn("[!WARNING]", out)
+        self.assertNotIn("other forum items", out)
+        self.assertIn("No mismatches found", out)
+
+    def test_seed_without_executor_deposit_in_forum_is_a_note_saying_so(self):
+        out = self._build(json.dumps({"forum": []}))
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertNotIn(self.FORUM_LINE, out)
+        self.assertNotIn("[!WARNING]", out)
+
+    def test_seed_not_to_dust_bin_stays_a_warning(self):
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md").replace(
+            self.DUST_BIN_ADDRESS, self.OTHER_ADDRESS
+        )
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertIn(self.SEED_WARNING, out)
+        self.assertIn("[!WARNING]", out)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_seed_without_address_book_stays_a_warning(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), book=None)
+        self.assertIn(self.SEED_WARNING, out)
+        self.assertNotIn(self.SEED_NOTE, out)
+
+    def test_forum_deposit_of_a_different_asset_does_not_pair(self):
+        forum = json.dumps({"forum": [
+            {"action": "Deposit", "asset": "USDC", "amount": "at least $150",
+             "recipient": "Aave Short Executor", "network": "Arbitrum"}
+        ]})
+        out = self._build(forum)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_forum_deposit_to_a_non_executor_does_not_pair(self):
+        forum = json.dumps({"forum": [
+            {"action": "Deposit", "asset": "USDG", "amount": "at least $150",
+             "recipient": "TokenLogic", "network": "Arbitrum"}
+        ]})
+        out = self._build(forum)
+        self.assertIn(self.NO_FORUM_LINE, out)
+        self.assertIn("1 other forum items are not in this payload", out)
+
+    def test_supply_flow_to_collector_on_existing_reserve_stays_a_warning(self):
+        diff = _read_fixture("ethereum_february2026_funding_update_diff.md")
+        out = self._build(json.dumps({"forum": []}), diff)
+        self.assertIn("> 🟠 In payload but not in the forum post: Supply flow for WETH:", out)
+        self.assertNotIn("Listing seed", out)
+
+    def test_supply_flow_to_dust_bin_on_existing_reserve_stays_a_warning(self):
+        diff = _read_fixture("usdg_arbitrum_listing_diff.md").replace(
+            "### Reserves added", "### Reserves altered"
+        )
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
+        self.assertIn("> 🟠 In payload but not in the forum post: Supply flow for USDG:", out)
+        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertNotIn("Listing seed (required for every new listing)", out)
+
+
 if __name__ == "__main__":
     unittest.main()

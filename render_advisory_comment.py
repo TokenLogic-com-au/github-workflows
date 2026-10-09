@@ -21,6 +21,8 @@ SCALE_OUTPUT_CAP = 4000
 # longest, is well under 400) with headroom for a busier proposal, while
 # still guarding against a pathological/adversarial input.
 FINDING_LINE_CAP = 800
+SEED_NOTE_PREFIX = "Listing seed (required for every new listing): "
+NO_SEED_FORUM_LINE = "Forum: no seed deposit found in the forum post"
 
 
 def _truncate_at_word_boundary(text: str, max_len: int) -> str:
@@ -82,7 +84,48 @@ def render_scale_alert(scale_check_output: str) -> str:
     return "> [!CAUTION]\n" + "\n".join(lines)
 
 
-def render_comparison_alerts(comparison: dict, readable_findings: list, omitted_index_updates: int = 0) -> str:
+def _forum_seed_line(forum_item) -> str:
+    if forum_item is None:
+        return NO_SEED_FORUM_LINE
+    described = " ".join(
+        str(forum_item.get(key) or "") for key in ("action", "amount", "asset")
+    ).split()
+    return f"Forum: {' '.join(described)} to {forum_item.get('recipient') or 'unknown recipient'}"
+
+
+def split_listing_seeds(readable_findings, forum_only, solidity_labels, chain):
+    """Splits out the listing seeds the address book proves go to the
+    instance's DUST_BIN (the seed every new listing requires) and pairs each
+    with at most one unmatched forum item. Returns (remaining_findings,
+    seed_notes, remaining_forum_only); `forum_only` is not modified. Without
+    an address book nothing is split out, so every seed stays a warning."""
+    forum_left = list(forum_only)
+    remaining, seed_notes = [], []
+    for finding in readable_findings:
+        is_seed_to_dust_bin = finding.get("kind") == readable_actions.LISTING_SEED_KIND and (
+            address_book.is_dust_bin(finding.get("beneficiary"), solidity_labels, chain)
+        )
+        if not is_seed_to_dust_bin:
+            remaining.append(finding)
+            continue
+        paired = spec_compare.pop_seed_forum_item(forum_left, finding.get("asset_symbol"))
+        seed_notes.append({**finding, "forum_line": _forum_seed_line(paired)})
+    return remaining, seed_notes, forum_left
+
+
+def _render_seed_notes(seed_notes) -> str:
+    lines = []
+    for note in seed_notes:
+        raw_lines = [f"> {SEED_NOTE_PREFIX}{note['line']}"]
+        raw_lines += [f">   - {sub}" for sub in note["sub_lines"]]
+        raw_lines.append(f">   - {note['forum_line']}")
+        lines += [_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP) for raw in raw_lines]
+    return "> [!NOTE]\n" + "\n".join(lines)
+
+
+def render_comparison_alerts(
+    comparison: dict, readable_findings: list, omitted_index_updates: int = 0, seed_notes: list = ()
+) -> str:
     """`readable_findings` is required (not `None`-defaulted): a caller
     that forgets to build it must fail loudly, not silently print "No
     mismatches found" while `comparison["unexplained"]` is nonempty."""
@@ -109,6 +152,8 @@ def render_comparison_alerts(comparison: dict, readable_findings: list, omitted_
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if not readable_findings and not comparison["warnings"]:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
+    if seed_notes:
+        blocks.append(_render_seed_notes(seed_notes))
     if comparison.get("notes"):
         lines = [
             sanitize_markdown(f"> {n['label']}: {n['detail']}", 300) for n in comparison["notes"]
@@ -179,11 +224,15 @@ def build(
     readable_findings = readable_actions.build_readable_findings(
         comparison["unexplained"], label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
     )
+    readable_findings, seed_notes, forum_only = split_listing_seeds(
+        readable_findings, comparison["forum_only"], solidity_labels, chain
+    )
+    comparison = {**comparison, "forum_only": forum_only, "forum_only_count": len(forum_only)}
     # Counted from the RAW diff report, not the deduped `payload_items` --
     # the same reserve index can legitimately update more than once in one
     # execution, and each occurrence was real, omitted activity.
     omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
-    parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates))
+    parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates, seed_notes))
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
     return "\n".join(parts)

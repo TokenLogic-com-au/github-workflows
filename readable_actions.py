@@ -12,6 +12,8 @@ diff_parser.count_reserve_data_updates).
 """
 from address_book import describe_address
 
+LISTING_SEED_KIND = "Listing seed"
+SUPPLY_FLOW_KIND = "Supply flow"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
@@ -184,7 +186,7 @@ def _find_listing_seed_groups(
         )
         payer_label = describe_address(payer, label_map, symbol_map, solidity_labels, chain)
         beneficiary_label = describe_address(beneficiary, label_map, symbol_map, solidity_labels, chain)
-        kind = "Listing seed" if reserve_symbol in new_reserve_symbols else "Supply flow"
+        kind = LISTING_SEED_KIND if reserve_symbol in new_reserve_symbols else SUPPLY_FLOW_KIND
         summary = (
             f"{kind} for {reserve_symbol}: {payer_label} supplies "
             f"{_amount_text(supply, symbol_map)} on behalf of {beneficiary_label}, "
@@ -197,6 +199,9 @@ def _find_listing_seed_groups(
                     describe_action(m, label_map, symbol_map, solidity_labels, chain) for m in members
                 ],
                 "members": members,
+                "kind": kind,
+                "asset_symbol": reserve_symbol,
+                "beneficiary": beneficiary,
             }
         )
     return groups
@@ -205,7 +210,8 @@ def _find_listing_seed_groups(
 def build_readable_findings(
     items, label_map, symbol_map, new_reserve_symbols=frozenset(), solidity_labels=None, chain=None
 ):
-    """Returns [{"line": str, "sub_lines": [str, ...]}] covering every item
+    """Returns [{"line": str, "sub_lines": [str, ...]}] (a seed group also
+    carries "kind", "asset_symbol" and "beneficiary") covering every item
     in `items` except a `ReserveDataUpdated` accounting line (protocol
     bookkeeping -- a rate/liquidity index -- never a payment; the caller
     reports how many were omitted separately, counted from the raw diff
@@ -219,7 +225,10 @@ def build_readable_findings(
         items, label_map, symbol_map, new_reserve_symbols, solidity_labels, chain
     )
     grouped_ids = {id(member) for group in seed_groups for member in group["members"]}
-    findings = [{"line": g["line"], "sub_lines": g["sub_lines"]} for g in seed_groups]
+    findings = [
+        {key: g[key] for key in ("line", "sub_lines", "kind", "asset_symbol", "beneficiary")}
+        for g in seed_groups
+    ]
     for item in items:
         if id(item) in grouped_ids:
             continue
