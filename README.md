@@ -20,19 +20,20 @@ setting on this repo must allow org repositories.
 
 ### Re-running the proposal-checks AI advisory
 
-The fork test, the diff report and every other proposal-checks job run on every push. The
-forum-vs-payload AI call does not: it is skipped while the PR's advisory comment (marker
-`<!-- github-workflows-proposal-spec -->`) was updated less than 24 hours ago. This limits
-AI cost. To get a fresh advisory before the 24 hours end, for example after a failing fork
-test starts to pass:
+The fork test, the diff report and every other proposal-checks job run on every PR update.
+The forum-vs-payload AI call does not: it is skipped while the PR's newest advisory comment
+(marker `<!-- github-workflows-proposal-spec -->`) was updated less than 24 hours ago. This
+limits AI cost. To get a fresh advisory before the 24 hours end, for example after a failing
+fork test starts to pass:
 
-1. Delete the advisory comment on the PR.
+1. Delete the advisory comment on the PR. If there is more than one, delete all of them.
 2. Re-run the latest `required-proposals` run from its Actions page ("Re-run all jobs").
-   `gh run rerun` returns 404 for this org-required workflow, because the workflow file
-   lives in this repo and not in the PR's repo; use the UI.
+   `gh run rerun` returned 404 for this org-required workflow; use the UI.
 
-With no advisory comment, the gate opens and the run posts a new comment. Do not edit the
-comment instead: an edit sets its update time to now, so the gate stays closed for 24 more hours.
+With no advisory comment, the gate opens and the run posts a new comment. This needs the
+same conditions as any advisory: one proposal folder with its `.md`, and the repo variable
+`PROPOSAL_CHECKS_LIVE=true`. Do not edit the comment instead: an edit sets its update time to
+now, so the gate stays closed for 24 more hours.
 
 Board sync and the board AI jobs (PR review, issue scope, progress note, quality scan) run
 from board-app's own workflows; this repo's `ai.py` and `prompts/` are checked out there at a
