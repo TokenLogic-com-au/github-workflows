@@ -20,10 +20,11 @@ setting on this repo must allow org repositories.
 
 ### Re-running the proposal-checks AI advisory
 
-The fork test, the diff report and every other proposal-checks job run on every PR update.
-The forum-vs-payload AI call does not: it is skipped while the PR's newest advisory comment
-(marker `<!-- github-workflows-proposal-spec -->`) was updated less than 24 hours ago. This
-limits AI cost. To get a fresh advisory before the 24 hours end, for example after a failing
+The fork test, the diff report and every other proposal-checks job run each time
+proposal-checks runs (PR opened, reopened or pushed to). The forum-vs-payload AI call does
+not: it is skipped while any advisory comment on the PR (marker
+`<!-- github-workflows-proposal-spec -->`) was updated less than 24 hours ago. This limits
+AI cost. To get a fresh advisory before the 24 hours end, for example after a failing
 fork test starts to pass:
 
 1. Delete the advisory comment on the PR. If there is more than one, delete all of them.
