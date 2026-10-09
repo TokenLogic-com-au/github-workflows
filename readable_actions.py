@@ -87,7 +87,7 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
     return f"{event_name or 'Event'}: {amount_text}, contract {recipient_label}"
 
 
-def _find_listing_seed_groups(
+def find_seed_groups(
     items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
     """A seed flow is: a Supply, on behalf of some beneficiary, paid for by
@@ -218,8 +218,7 @@ def _find_listing_seed_groups(
 def build_readable_findings(
     items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
-    """Returns [{"line": str, "sub_lines": [str, ...]}] (a seed group also
-    carries "kind", "asset_symbol", "beneficiary", "pool" and "reserve") covering every item
+    """Returns [{"line": str, "sub_lines": [str, ...]}] covering every item
     in `items` except a `ReserveDataUpdated` accounting line (protocol
     bookkeeping -- a rate/liquidity index -- never a payment; the caller
     reports how many were omitted separately, counted from the raw diff
@@ -229,12 +228,12 @@ def build_readable_findings(
     into one summary line with its underlying events as sub_lines;
     everything else (including any event outside the recognized patterns)
     gets its own single-line description."""
-    seed_groups = _find_listing_seed_groups(
+    seed_groups = find_seed_groups(
         items, label_map, symbol_map, new_reserves, solidity_labels, chain
     )
     grouped_ids = {id(member) for group in seed_groups for member in group["members"]}
     findings = [
-        {key: g[key] for key in ("line", "sub_lines", "kind", "asset_symbol", "beneficiary", "pool", "reserve")}
+        {key: g[key] for key in ("line", "sub_lines")}
         for g in seed_groups
     ]
     for item in items:

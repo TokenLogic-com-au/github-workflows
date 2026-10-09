@@ -339,7 +339,6 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertNotIn(self.SEED_NOTE, out)
         self.assertNotIn("Listing seed (required for every new listing)", out)
 
-
     def test_crafted_seed_with_fake_atoken_mint_stays_a_warning(self):
         attacker = "0x2222222222222222222222222222222222222222"
         executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
@@ -367,9 +366,9 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertIn("[!WARNING]", out)
         block = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
         self.assertIn(attacker, block)
-        self.assertNotIn(self.SEED_NOTE, out)
+        self.assertIn(self.SEED_NOTE, out)
+        self.assertNotIn(attacker, out.split(self.SEED_NOTE, 1)[1].split("\n\n", 1)[0])
         self.assertNotIn("No mismatches found", out)
-
 
     def test_seed_with_wrong_mint_amount_stays_a_warning(self):
         original = _read_fixture("usdg_arbitrum_listing_diff.md")
@@ -381,7 +380,6 @@ class ListingSeedNoteTests(unittest.TestCase):
         out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
         self.assertNotIn(self.SEED_NOTE, out)
         self.assertIn("[!WARNING]", out)
-
 
     def test_seed_from_a_non_pool_emitter_stays_a_warning(self):
         real_pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
@@ -397,7 +395,7 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertNotIn(self.SEED_NOTE, out)
         self.assertIn("[!WARNING]", out)
 
-    def test_second_seed_supply_of_the_same_reserve_stays_a_warning(self):
+    def _two_seed_flow_diff(self):
         executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
         pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
         atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
@@ -430,10 +428,31 @@ class ListingSeedNoteTests(unittest.TestCase):
             + supply_row.replace("| 18 |", "| 22 |").replace("amount: 150 [150000000, 6 decimals]", f"amount: {value}")
             + "\n",
         )
-        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), diff)
-        self.assertEqual(out.count(self.SEED_NOTE), 1)
+        return diff
+
+    def test_second_seed_supply_of_the_same_reserve_stays_a_warning(self):
+        out = self._build(_read_fixture("usdg_arbitrum_listing_forum_ai_out.json"), self._two_seed_flow_diff())
+        self.assertEqual(out.count(self.SEED_NOTE), 0)
         warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
         self.assertIn("1,000,000", warning)
+        self.assertNotIn("No mismatches found", out)
+
+    def test_forum_that_explains_the_genuine_seed_cannot_promote_a_second_seed(self):
+        executor = "0xFF1137243698CaA18EE364Cc966CF0e02A4e6327"
+        pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+        usdg = "0x004B506865409877C9fA29bfb1ebA929984B9bbC"
+        atoken = "0xf59036CAEBeA7dC4b86638DFA2E3C97dA9FcCd40"
+        forum = json.dumps({"forum": [
+            {"action": "Approve", "asset": "USDG", "amount": "150", "recipient": pool},
+            {"action": "Supply", "asset": "USDG", "amount": "150", "recipient": usdg},
+            {"action": "Transfer", "asset": "USDG", "amount": "150", "recipient": atoken},
+            {"action": "Mint", "asset": "aArbUSDG", "amount": "150,000,000", "recipient": self.DUST_BIN_ADDRESS},
+        ]})
+        out = self._build(forum, self._two_seed_flow_diff())
+        self.assertEqual(out.count(self.SEED_NOTE), 0)
+        warning = out.split("> [!WARNING]", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("1,000,000", warning)
+        self.assertNotIn("No mismatches found", out)
 
 
 if __name__ == "__main__":

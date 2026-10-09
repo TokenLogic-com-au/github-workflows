@@ -6,6 +6,7 @@ against the diff report's deterministically parsed payload actions
 """
 import json
 import sys
+from collections import Counter
 
 import address_book
 import diff_parser
@@ -93,35 +94,41 @@ def _forum_seed_line(forum_item) -> str:
     return f"Forum: {' '.join(described)} to {forum_item.get('recipient') or 'unknown recipient'}"
 
 
-def split_listing_seeds(readable_findings, forum_only, solidity_labels, chain):
-    """Splits out the listing seeds the address book proves go to the
-    instance's DUST_BIN through the instance's POOL (the seed every new
-    listing requires), at most one per new reserve (a later seed of the same
-    reserve stays a warning), and pairs each with at most one unmatched
-    forum item. Returns (remaining_findings,
-    seed_notes, remaining_forum_only); `forum_only` is not modified. Without
-    an address book nothing is split out, so every seed stays a warning."""
-    forum_left = list(forum_only)
-    remaining, seed_notes = [], []
-    noted_reserves = set()
-    for finding in readable_findings:
-        is_proven_seed = (
-            finding.get("kind") == readable_actions.LISTING_SEED_KIND
-            and finding.get("reserve") not in noted_reserves
-            and address_book.names_book_constant(
-                finding.get("beneficiary"), solidity_labels, chain, address_book.DUST_BIN_CONSTANT
-            )
-            and address_book.names_book_constant(
-                finding.get("pool"), solidity_labels, chain, address_book.POOL_CONSTANT
-            )
+def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain):
+    """Proves the listing seeds over ALL payload items, before the forum
+    compare, so the forum post can never choose which group counts as the
+    seed. A group is proven when it is a listing seed whose beneficiary the
+    address book names DUST_BIN and whose pool it names POOL; a reserve's
+    group is taken only when it has exactly one proven group (two or more
+    stay in the payload items and go through the compare as warnings).
+    Returns (seed_groups, remaining_payload_items). Without an address book
+    nothing is taken, so every seed stays a warning."""
+    proven = [
+        group
+        for group in readable_actions.find_seed_groups(
+            payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
         )
-        if not is_proven_seed:
-            remaining.append(finding)
-            continue
-        noted_reserves.add(finding["reserve"])
-        paired = spec_compare.pop_seed_forum_item(forum_left, finding.get("asset_symbol"))
-        seed_notes.append({**finding, "forum_line": _forum_seed_line(paired)})
-    return remaining, seed_notes, forum_left
+        if group["kind"] == readable_actions.LISTING_SEED_KIND
+        and address_book.names_book_constant(
+            group["beneficiary"], solidity_labels, chain, address_book.DUST_BIN_CONSTANT
+        )
+        and address_book.names_book_constant(group["pool"], solidity_labels, chain, address_book.POOL_CONSTANT)
+    ]
+    per_reserve = Counter(group["reserve"] for group in proven)
+    taken = [group for group in proven if per_reserve[group["reserve"]] == 1]
+    taken_ids = {id(member) for group in taken for member in group["members"]}
+    return taken, [item for item in payload_items if id(item) not in taken_ids]
+
+
+def pair_seed_notes(seed_groups, forum_only):
+    """Pairs each taken seed group with at most one unmatched forum item.
+    Returns (seed_notes, remaining_forum_only); `forum_only` is not modified."""
+    forum_left = list(forum_only)
+    seed_notes = []
+    for group in seed_groups:
+        paired = spec_compare.pop_seed_forum_item(forum_left, group["asset_symbol"])
+        seed_notes.append({**group, "forum_line": _forum_seed_line(paired)})
+    return seed_notes, forum_left
 
 
 def _render_seed_notes(seed_notes) -> str:
@@ -225,19 +232,20 @@ def build(
         parts.append(render_scale_alert(scale_out_text))
         return "\n".join(parts)
 
-    comparison = spec_compare.compare(forum_items, payload_items)
     label_map, symbol_map = address_book.build_maps(diff_report_text)
     new_reserves = address_book.new_reserves(diff_report_text)
     # A missing/empty address_book_root degrades to {} (no book) rather than
     # raising -- callers that don't pass one at all get today's behaviour.
     solidity_labels = address_book.load_solidity_labels(address_book_root)
     chain = address_book.infer_chain(diff_report_text)
+    seed_groups, remaining_items = take_proven_listing_seeds(
+        payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
+    )
+    comparison = spec_compare.compare(forum_items, remaining_items)
     readable_findings = readable_actions.build_readable_findings(
         comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels, chain
     )
-    readable_findings, seed_notes, forum_only = split_listing_seeds(
-        readable_findings, comparison["forum_only"], solidity_labels, chain
-    )
+    seed_notes, forum_only = pair_seed_notes(seed_groups, comparison["forum_only"])
     comparison = {**comparison, "forum_only": forum_only, "forum_only_count": len(forum_only)}
     # Counted from the RAW diff report, not the deduped `payload_items` --
     # the same reserve index can legitimately update more than once in one
