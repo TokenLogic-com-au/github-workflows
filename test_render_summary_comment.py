@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 
@@ -198,10 +199,26 @@ class RenderTests(unittest.TestCase):
         out = rsc.render(results, {"coverage": "src/a|b.sol|1|20"}, "83", "100", "", False, REPO, SHA)
         self.assertIn(f"/src/a%7Cb.sol#L20): 20 (1 line)", out)
 
-    def test_coverage_non_numeric_anchor_renders_the_name_without_a_link(self):
+    def test_coverage_row_not_in_the_awk_format_is_dropped(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
-        out = rsc.render(results, {"coverage": "src/x/Foo.sol|1|x)"}, "83", "100", "", False, REPO, SHA)
-        self.assertIn("> 🔴   Foo.sol: x) (1 line)", out)
+        for row in ("src/x/Foo.sol|1|x)", "src/x/Foo.sol|1)|20", "src/x/Foo.sol|1|20,<b>"):
+            with self.subTest(row=row):
+                out = rsc.render(results, {"coverage": row}, "83", "100", "", False, REPO, SHA)
+                self.assertNotIn("Foo.sol", out)
+
+    def test_coverage_labels_keep_only_file_name_characters_across_rows(self):
+        """Two crafted basenames on adjacent rows must not combine into HTML, a link or code."""
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        details = {"coverage": 'src/A<a href="https:&sol;&sol;evil.example&sol;a.sol|1|20\n'
+                               'src/B">click.sol|1|30\nsrc/`C\\.sol|1|40\nsrc/@reviewer.sol|1|50'}
+        out = rsc.render(results, details, "83", "100", "", False, REPO, SHA)
+        labels = re.findall(r"🔴   \[([^\]]*)\]\(", out)
+        self.assertEqual(len(labels), 4)
+        for label in labels:
+            self.assertRegex(label, r"^[A-Za-z0-9._-]+$")
+        for bad in ("<", ">", '"', "`", "\\", "@", "&"):
+            self.assertNotIn(bad, "".join(labels))
+        self.assertNotIn("evil.example/", out)
 
     def test_coverage_with_every_test_skipped_says_so_instead_of_listing_lines(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
