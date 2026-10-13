@@ -62,7 +62,9 @@ and `gitsubmodule` (forge libraries) on weekly schedule; npm is left out on purp
 Runs `forge coverage`, sums line coverage under `path_prefix` (excluding
 `exclude_suffixes`), and fails if it's below `min_coverage`. Shared by
 `foundry-ci.yml` (all of `src/`) and `proposal-checks.yml` (payload files
-only).
+only). Outputs `uncovered` (every uncovered line, as ranges per file) and
+`tests` (forge's passed/skipped/total tally); the proposal-checks summary
+says when every test was skipped instead of listing lines.
 
 ## Minimal caller example
 

@@ -42,13 +42,13 @@ def run_awk(
 ):
     with tempfile.TemporaryDirectory() as d:
         lcov_path = os.path.join(d, "lcov.info")
-        sample_path = os.path.join(d, "sample.txt")
+        sample_path = os.path.join(d, "uncovered.txt")
         with open(lcov_path, "w") as f:
             f.write(lcov_text)
         env = dict(os.environ)
         env["PATH_PREFIX"] = path_prefix
         env["EXCLUDE_SUFFIXES"] = exclude_suffixes
-        env["SAMPLE_FILE"] = sample_path
+        env["UNCOVERED_FILE"] = sample_path
         result = subprocess.run(
             [awk_bin, "-f", awk_script, lcov_path],
             env=env,
@@ -132,7 +132,7 @@ class CoverageAwkTests(unittest.TestCase):
         def check(awk_bin):
             covered, total, sample = run_awk(awk_bin, lcov)
             self.assertEqual((covered, total), (2, 3))
-            self.assertEqual(sample, ["src/X.sol:5"])
+            self.assertEqual(sample, ["src/X.sol|1|5"])
 
             with tempfile.TemporaryDirectory() as d:
                 buggy = make_unbounded_body_variant(d)
@@ -141,7 +141,7 @@ class CoverageAwkTests(unittest.TestCase):
                 )
                 # the bug lets b's hit lines count as a's body, wrongly
                 # marking a's header covered too.
-                self.assertNotEqual((bcovered, btotal, bsample), (2, 3, ["src/X.sol:5"]))
+                self.assertNotEqual((bcovered, btotal, bsample), (2, 3, ["src/X.sol|1|5"]))
                 self.assertEqual((bcovered, btotal, bsample), (3, 3, []))
 
         self.for_each_awk(check)
@@ -160,11 +160,11 @@ class CoverageAwkTests(unittest.TestCase):
         def check(awk_bin):
             covered, total, sample = run_awk(awk_bin, lcov)
             self.assertEqual((covered, total), (0, 1))
-            self.assertEqual(sample, ["src/B.sol:5"])
+            self.assertEqual(sample, ["src/B.sol|1|5"])
 
         self.for_each_awk(check)
 
-    def test_uncalled_multiline_function_fails_and_body_lines_sampled(self):
+    def test_uncalled_multiline_function_fails_as_one_range(self):
         lcov = (
             "TN:\n"
             "SF:src/C.sol\n"
@@ -180,7 +180,7 @@ class CoverageAwkTests(unittest.TestCase):
         def check(awk_bin):
             covered, total, sample = run_awk(awk_bin, lcov)
             self.assertEqual((covered, total), (0, 3))
-            self.assertEqual(sample, ["src/C.sol:5", "src/C.sol:6", "src/C.sol:7"])
+            self.assertEqual(sample, ["src/C.sol|3|5-7"])
 
         self.for_each_awk(check)
 
@@ -230,7 +230,7 @@ class CoverageAwkTests(unittest.TestCase):
             covered, total, sample = run_awk(awk_bin, lcov)
             # if boundary bug: covered would be 3/3 (record1 header wrongly covered)
             self.assertEqual((covered, total), (2, 3))
-            self.assertEqual(sample, ["src/E.sol:20"])
+            self.assertEqual(sample, ["src/E.sol|1|20"])
 
         self.for_each_awk(check)
 
@@ -291,25 +291,62 @@ class CoverageAwkTests(unittest.TestCase):
 
         self.for_each_awk(check)
 
-    def test_sample_sorted_by_file_then_line_and_capped_at_15(self):
-        lines = []
-        lines.append("TN:")
-        lines.append("SF:src/Z.sol")
-        lines.append("FN:1,z")
+    def test_fully_uncovered_file_is_one_range_over_scrambled_lines(self):
+        lines = ["TN:", "SF:src/Z.sol", "FN:1,z"]
         # 20 uncovered single-line functions in descending, scrambled order
         for n in sorted(range(1, 21), reverse=True):
             lines.append(f"DA:{n},0")
-        lines.append("LF:20")
-        lines.append("LH:0")
-        lines.append("end_of_record")
+        lines += ["LF:20", "LH:0", "end_of_record"]
         lcov = "\n".join(lines) + "\n"
 
         def check(awk_bin):
             covered, total, sample = run_awk(awk_bin, lcov)
             self.assertEqual((covered, total), (0, 20))
-            self.assertEqual(len(sample), 15)
-            expected = [f"src/Z.sol:{n}" for n in range(1, 16)]
-            self.assertEqual(sample, expected)
+            self.assertEqual(sample, ["src/Z.sol|20|1-20"])
+
+        self.for_each_awk(check)
+
+    def test_a_covered_line_splits_ranges_and_gaps_between_lines_do_not(self):
+        # 63, 67, 70 uncovered with no covered instrumented line between them
+        # (blank or comment lines in the source) stay one range; the covered
+        # 72 splits off the next one.
+        lcov = (
+            "TN:\n"
+            "SF:src/R.sol\n"
+            "DA:63,0\nDA:67,0\nDA:70,0\nDA:72,1\nDA:76,0\nDA:80,0\nDA:90,1\nDA:95,0\n"
+            "LF:8\nLH:2\nend_of_record\n"
+        )
+
+        def check(awk_bin):
+            covered, total, sample = run_awk(awk_bin, lcov)
+            self.assertEqual((covered, total), (2, 8))
+            self.assertEqual(sample, ["src/R.sol|6|63-70,76-80,95"])
+
+        self.for_each_awk(check)
+
+    def test_ranges_capped_at_eight_runs_with_a_remainder_count(self):
+        # 11 isolated uncovered lines, each followed by a covered one
+        das = "".join(f"DA:{n},0\nDA:{n + 1},1\n" for n in range(10, 120, 10))
+        lcov = "TN:\nSF:src/C8.sol\n" + das + "LF:22\nLH:11\nend_of_record\n"
+
+        def check(awk_bin):
+            covered, total, sample = run_awk(awk_bin, lcov)
+            self.assertEqual((covered, total), (11, 22))
+            self.assertEqual(sample, ["src/C8.sol|11|10,20,30,40,50,60,70,80,+3 more"])
+
+        self.for_each_awk(check)
+
+    def test_one_row_per_file_sorted_by_file_and_fully_covered_files_omitted(self):
+        lcov = (
+            "TN:\nSF:src/b/B.sol\nDA:1,0\nLF:1\nLH:0\nend_of_record\n"
+            "TN:\nSF:src/a/Covered.sol\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+            "TN:\nSF:src/a/A.sol\nDA:4,0\nDA:5,0\nLF:2\nLH:0\nend_of_record\n"
+        )
+
+        def check(awk_bin):
+            covered, total, sample = run_awk(awk_bin, lcov)
+            self.assertEqual((covered, total), (1, 4))
+            self.assertEqual(sample, ["src/a/A.sol|2|4-5", "src/b/B.sol|1|1"])
 
         self.for_each_awk(check)
 

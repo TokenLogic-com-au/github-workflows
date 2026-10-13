@@ -304,7 +304,8 @@ jobs:
       FOUNDRY_PROFILE: test
     outputs:
       pct: ${{ steps.gate.outputs.pct }}
-      uncovered_sample: ${{ steps.gate.outputs.uncovered_sample }}
+      uncovered: ${{ steps.gate.outputs.uncovered }}
+      tests: ${{ steps.gate.outputs.tests }}
       min_coverage: ${{ inputs.min_coverage }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -649,7 +650,8 @@ jobs:
           RESULT_ADVISORY: ${{ needs.advisory.result }}
           DETAILS_ADDRESS_BOOK: ${{ needs.address-book.outputs.details }}
           DETAILS_SPELLING: ${{ needs.spelling.outputs.details }}
-          DETAILS_COVERAGE: ${{ needs.coverage.outputs.uncovered_sample }}
+          DETAILS_COVERAGE: ${{ needs.coverage.outputs.uncovered }}
+          COVERAGE_TESTS: ${{ needs.coverage.outputs.tests }}
           COVERAGE_PCT: ${{ needs.coverage.outputs.pct }}
           COVERAGE_MIN: ${{ needs.coverage.outputs.min_coverage }}
           ADVISORY_URL: ${{ needs.advisory.outputs.comment_url }}
@@ -661,7 +663,7 @@ jobs:
           if [ "$SCOPE_COUNT" = "0" ]; then
             echo "No proposal folder changed in this PR; proposal checks skipped." > summary_body.md
           else
-            # details/uncovered_sample are base64 on the wire (see the
+            # details/uncovered are base64 on the wire (see the
             # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
             # writes were observed to fail delimiter matching on this runner.
             ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
@@ -672,14 +674,16 @@ jobs:
               --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
               --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
               --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
-              --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
+              --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg cov_tests "$COVERAGE_TESTS" \
+              --arg adv_url "$ADVISORY_URL" \
               --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" --arg upstream_line "$upstream_line_plain" \
               '{
                 results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
                 advisory_has_issues: ($adv_issues == "1"),
                 repo: $repo, head_sha: $head_sha,
                 details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
-                coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url,
+                coverage_pct: $cov_pct, coverage_min: $cov_min, coverage_tests: $cov_tests,
+                advisory_url: $adv_url,
                 upstream_pr_line: $upstream_line
               }' > summary_payload.json
             python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \

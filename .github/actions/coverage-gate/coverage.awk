@@ -1,22 +1,26 @@
 # Sums lcov line coverage under PATH_PREFIX (excluding EXCLUDE_SUFFIXES).
 # A function's 0-hit FN header line counts as covered when a later line
-# of its body ran. Env: PATH_PREFIX, EXCLUDE_SUFFIXES, SAMPLE_FILE.
-# Prints "<covered> <total>"; writes up to 15 sorted "file:line" to SAMPLE_FILE.
+# of its body ran. Env: PATH_PREFIX, EXCLUDE_SUFFIXES, UNCOVERED_FILE.
+# Prints "<covered> <total>"; writes one "file|count|ranges" row per file
+# with uncovered lines to UNCOVERED_FILE, sorted by file. `ranges` joins
+# runs of uncovered lines with no covered instrumented line between them
+# ("63-104,110"), at most MAX_RUNS runs, then "+N more".
 # Known limit: an unused inline-assembly function inside a Solidity
 # function body counts as covered when a later line of that body ran.
 
 BEGIN {
-    sample_file = ENVIRON["SAMPLE_FILE"]
-    if (sample_file == "") sample_file = "uncovered_sample.txt"
+    MAX_RUNS = 8
+    out_file = ENVIRON["UNCOVERED_FILE"]
+    if (out_file == "") out_file = "uncovered.txt"
     n_ex = split(ENVIRON["EXCLUDE_SUFFIXES"], ex, " ")
     covered = 0
     total = 0
     in_scope = 0
-    n_uncovered = 0
-    # truncate/create the sample file up front so a run with zero
+    n_files = 0
+    # truncate/create the output file up front so a run with zero
     # uncovered entries never leaves a stale file behind.
-    printf "" > sample_file
-    close(sample_file)
+    printf "" > out_file
+    close(out_file)
 }
 
 function is_excluded(path,    i, suf, plen, slen) {
@@ -35,6 +39,7 @@ function reset_record() {
     n_fn = 0
     delete daline
     delete dahits
+    delete dacov
     n_da = 0
 }
 
@@ -96,11 +101,12 @@ function body_hit(lo, hi,    k) {
     return 0
 }
 
-function flush_record(    i, line, hits, nfl) {
+function flush_record(    i, j, line, hits, nfl, kl, kc, count, runs, n_runs, run_lo, run_hi, open_run) {
     if (!in_scope) return
     for (i = 1; i <= n_da; i++) {
         line = daline[i]
         hits = dahits[i]
+        dacov[i] = 1
         if (hits > 0) {
             covered++
             continue
@@ -112,29 +118,53 @@ function flush_record(    i, line, hits, nfl) {
                 continue
             }
         }
-        n_uncovered++
-        uf[n_uncovered] = cur_file
-        ul[n_uncovered] = line
+        dacov[i] = 0
     }
+    # insertion sort by line; a record holds one file's lines, small enough
+    # in practice for O(n^2) and awk-portable.
+    for (i = 2; i <= n_da; i++) {
+        kl = daline[i]; kc = dacov[i]
+        j = i - 1
+        while (j >= 1 && daline[j] > kl) {
+            daline[j+1] = daline[j]; dacov[j+1] = dacov[j]
+            j--
+        }
+        daline[j+1] = kl; dacov[j+1] = kc
+    }
+    count = 0; n_runs = 0; runs = ""; open_run = 0
+    for (i = 1; i <= n_da + 1; i++) {
+        if (i <= n_da && !dacov[i]) {
+            count++
+            if (!open_run) { run_lo = daline[i]; open_run = 1 }
+            run_hi = daline[i]
+            continue
+        }
+        if (open_run) {
+            n_runs++
+            if (n_runs <= MAX_RUNS)
+                runs = runs (runs == "" ? "" : ",") (run_lo == run_hi ? run_lo : run_lo "-" run_hi)
+            open_run = 0
+        }
+    }
+    if (count == 0) return
+    if (n_runs > MAX_RUNS) runs = runs ",+" (n_runs - MAX_RUNS) " more"
+    n_files++
+    rf[n_files] = cur_file
+    rrow[n_files] = cur_file "|" count "|" runs
 }
 
 END {
     flush_record()
-    # insertion sort by file then numeric line; n_uncovered is small
-    # enough in practice that O(n^2) is fine and stays awk-portable.
-    for (i = 2; i <= n_uncovered; i++) {
-        kf = uf[i]; kl = ul[i]
+    for (i = 2; i <= n_files; i++) {
+        kf = rf[i]; kr = rrow[i]
         j = i - 1
-        while (j >= 1 && (uf[j] > kf || (uf[j] == kf && ul[j] + 0 > kl + 0))) {
-            uf[j+1] = uf[j]; ul[j+1] = ul[j]
+        while (j >= 1 && rf[j] > kf) {
+            rf[j+1] = rf[j]; rrow[j+1] = rrow[j]
             j--
         }
-        uf[j+1] = kf; ul[j+1] = kl
+        rf[j+1] = kf; rrow[j+1] = kr
     }
-    cap = (n_uncovered < 15) ? n_uncovered : 15
-    for (i = 1; i <= cap; i++) {
-        print uf[i] ":" ul[i] >> sample_file
-    }
-    close(sample_file)
+    for (i = 1; i <= n_files; i++) print rrow[i] >> out_file
+    close(out_file)
     print covered " " total
 }
