@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 
@@ -134,7 +135,7 @@ class RenderTests(unittest.TestCase):
 
     def test_coverage_failure_still_renders_red_and_fails(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
-        out = rsc.render(results, {"coverage": "src/x/Foo.sol:20"}, "83", "100", "", False, REPO, SHA)
+        out = rsc.render(results, {"coverage": "src/x/Foo.sol|1|20"}, "83", "100", "", False, REPO, SHA)
         self.assertIn("❌ **coverage**", out)
         self.assertIn("🔴", out)
         self.assertIn("[!CAUTION]", out)
@@ -169,17 +170,82 @@ class RenderTests(unittest.TestCase):
 
     def test_coverage_failure_shows_measured_vs_required(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
-        out = rsc.render(results, {"coverage": "src/x/Foo.sol:20"}, "83", "100", "", False, REPO, SHA)
+        out = rsc.render(results, {"coverage": "src/x/Foo.sol|1|20"}, "83", "100", "", False, REPO, SHA)
         self.assertIn("83% measured", out)
         self.assertIn("100% required", out)
-        self.assertIn("Foo.sol:20", out)
+        self.assertIn(f"[Foo.sol](https://github.com/{REPO}/blob/{SHA}/src/x/Foo.sol#L20): 20 (1 line)", out)
 
-    def test_coverage_two_uncovered_lines_render_as_two_lines(self):
+    def test_coverage_renders_one_line_per_file_with_its_ranges(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
-        details = {"coverage": "src/x/Foo.sol:20\nsrc/x/Bar.sol:5"}
+        details = {"coverage": "src/x/Bar.sol|3|5-7\nsrc/x/Foo.sol|21|63-104,110,+2 more"}
+        out = rsc.render(results, details, "83", "100", "", False, REPO, SHA, coverage_tests="4 0 4")
+        self.assertIn("> 🔴 uncovered lines:", out)
+        self.assertIn(f"[Bar.sol](https://github.com/{REPO}/blob/{SHA}/src/x/Bar.sol#L5): 5-7 (3 lines)", out)
+        self.assertIn(f"[Foo.sol](https://github.com/{REPO}/blob/{SHA}/src/x/Foo.sol#L63): 63-104,110,+2 more (21 lines)", out)
+        self.assertNotIn("skipped", out)
+
+    def test_coverage_link_path_cannot_close_the_link_or_mention(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        details = {"coverage": "src/dir) @reviewer [x](https://evil.example/)/Foo.sol|1|20"}
         out = rsc.render(results, details, "83", "100", "", False, REPO, SHA)
-        self.assertIn("src/x/Foo.sol:20", out)
-        self.assertIn("src/x/Bar.sol:5", out)
+        self.assertIn(
+            f"(https://github.com/{REPO}/blob/{SHA}/src/dir%29%20%40reviewer%20%5Bx%5D%28https%3A//evil.example/%29/Foo.sol#L20)",
+            out)
+        self.assertNotIn("@reviewer", out)
+        self.assertNotIn("](https://evil.example", out)
+
+    def test_coverage_row_with_a_pipe_in_the_path_keeps_count_and_ranges(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        out = rsc.render(results, {"coverage": "src/a|b.sol|1|20"}, "83", "100", "", False, REPO, SHA)
+        self.assertIn(f"/src/a%7Cb.sol#L20): 20 (1 line)", out)
+
+    def test_coverage_row_not_in_the_awk_format_is_dropped(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        for row in ("src/x/Foo.sol|1|x)", "src/x/Foo.sol|1)|20", "src/x/Foo.sol|1|20,<b>"):
+            with self.subTest(row=row):
+                out = rsc.render(results, {"coverage": row}, "83", "100", "", False, REPO, SHA)
+                self.assertNotIn("Foo.sol", out)
+
+    def test_coverage_labels_keep_only_file_name_characters_across_rows(self):
+        """Two crafted basenames on adjacent rows must not combine into HTML, a link or code."""
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        details = {"coverage": 'src/A<a href="https:&sol;&sol;evil.example&sol;a.sol|1|20\n'
+                               'src/B">click.sol|1|30\nsrc/`C\\.sol|1|40\nsrc/@reviewer.sol|1|50'}
+        out = rsc.render(results, details, "83", "100", "", False, REPO, SHA)
+        labels = re.findall(r"🔴   \[([^\]]*)\]\(", out)
+        self.assertEqual(len(labels), 4)
+        for label in labels:
+            self.assertRegex(label, r"^[A-Za-z0-9._-]+$")
+        for bad in ("<", ">", '"', "`", "\\", "@", "&"):
+            self.assertNotIn(bad, "".join(labels))
+        self.assertNotIn("evil.example/", out)
+
+    def test_coverage_with_every_test_skipped_says_so_instead_of_listing_lines(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        details = {"coverage": "src/x/Foo.sol|20|63-104"}
+        out = rsc.render(results, details, "0", "100", "", False, REPO, SHA, coverage_tests="0 3 3")
+        self.assertIn("0% measured, 100% required. All 3 tests were skipped (vm.skip), so no test ran the payload.", out)
+        self.assertNotIn("uncovered lines", out)
+
+    def test_coverage_with_some_tests_skipped_counts_them(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        out = rsc.render(results, {"coverage": "src/x/Foo.sol|1|20"}, "83", "100", "", False, REPO, SHA,
+                         coverage_tests="2 1 3")
+        self.assertIn("83% measured, 100% required (1 of 3 tests skipped)", out)
+        self.assertIn("Foo.sol", out)
+
+    def test_coverage_main_reads_the_tests_tally_from_the_payload(self):
+        import io
+        import json
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        payload = {"results": {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"},
+                   "details": {"coverage": ""}, "coverage_pct": "0", "coverage_min": "100",
+                   "coverage_tests": "0 1 1", "repo": REPO, "head_sha": SHA}
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), redirect_stdout(io.StringIO()) as out:
+            rsc.main()
+        self.assertIn("All 1 test was skipped (vm.skip)", out.getvalue())
 
     def test_advisory_link_included_when_present(self):
         results = {k: "success" for k in rsc.CHECK_ORDER}

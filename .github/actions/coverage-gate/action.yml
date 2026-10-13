@@ -33,9 +33,17 @@ outputs:
   pct:
     description: Measured line coverage percentage under path_prefix (empty if the gate was skipped).
     value: ${{ steps.measure.outputs.pct }}
-  uncovered_sample:
-    description: Up to 15 "file:line" entries with zero hits under path_prefix, newline-separated.
-    value: ${{ steps.measure.outputs.uncovered_sample }}
+  uncovered:
+    description: >-
+      Base64 of one "file|count|ranges" row per file under path_prefix with
+      uncovered lines (see coverage.awk), newline-separated.
+    value: ${{ steps.measure.outputs.uncovered }}
+  tests:
+    description: >-
+      "<passed> <skipped> <total>" from forge's closing tally, so a reader can
+      tell a 0% caused by every test calling vm.skip from untested code
+      (empty if the gate was skipped or forge printed no tally).
+    value: ${{ steps.measure.outputs.tests }}
 runs:
   using: composite
   steps:
@@ -63,24 +71,28 @@ runs:
         if [ "$MIN_COVERAGE" -eq 0 ]; then
           echo "min_coverage not set; skipping coverage gate"
           echo "pct=" >> "$GITHUB_OUTPUT"
-          echo "uncovered_sample=" >> "$GITHUB_OUTPUT"
+          echo "uncovered=" >> "$GITHUB_OUTPUT"
+          echo "tests=" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         args=(--report lcov --report-file lcov.info)
         [ -n "$NO_MATCH_TEST" ] && args+=(--no-match-test "$NO_MATCH_TEST")
         [ -n "$MATCH_PATH" ] && args+=(--match-path "$MATCH_PATH")
-        forge coverage "${args[@]}"
-        rm -f uncovered_sample.txt
+        forge coverage "${args[@]}" | tee forge_coverage.log
+        # forge's closing line: "Ran N test suites in ...: P tests passed, F failed, S skipped (T total tests)"
+        tests=$(sed -nE 's/.*: ([0-9]+) tests passed, [0-9]+ failed, ([0-9]+) skipped \(([0-9]+) total tests\).*/\1 \2 \3/p' forge_coverage.log | tail -n1)
+        echo "tests=$tests" >> "$GITHUB_OUTPUT"
+        rm -f uncovered.txt
         read -r covered total < <(
-          SAMPLE_FILE=uncovered_sample.txt awk -f "$GITHUB_ACTION_PATH/coverage.awk" lcov.info
+          UNCOVERED_FILE=uncovered.txt awk -f "$GITHUB_ACTION_PATH/coverage.awk" lcov.info
         )
-        uncovered_sample="$(cat uncovered_sample.txt)"
+        uncovered="$(cat uncovered.txt)"
         # base64-encoded single-line output: the multi-line `name<<EOF ... EOF`
         # form was observed to fail delimiter matching on this runner
         # ("Invalid value. Matching delimiter not found") for non-trivial
         # content, silently dropping the output. base64 sidesteps that
         # entirely; the summary job decodes it back.
-        echo "uncovered_sample=$(printf '%s' "$uncovered_sample" | base64 -w0)" >> "$GITHUB_OUTPUT"
+        echo "uncovered=$(printf '%s' "$uncovered" | base64 -w0)" >> "$GITHUB_OUTPUT"
         if [ "$total" -eq 0 ]; then
           echo "pct=" >> "$GITHUB_OUTPUT"
           echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"

@@ -4,7 +4,9 @@ pass/fail/warning icon, and for a failing blocking check, a compact table
 of what actually went wrong with file:line links to the PR head. Never
 fails on its own -- called from a job that must post something even when
 every upstream job errored."""
+import re
 import sys
+from urllib.parse import quote
 
 from sanitize import sanitize_markdown
 
@@ -87,6 +89,51 @@ def _render_spelling_table(raw_detail: str, repo: str, head_sha: str) -> str:
     return "| File:Line | Word | Suggestion | Context |\n|---|---|---|---|\n" + "\n".join(rows)
 
 
+# A coverage row is repo content: the label keeps only file-name characters
+# (no Markdown or HTML can survive), and count/ranges must be what
+# coverage.awk writes ("12", "63-104,110,+2 more").
+_LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+_RANGES_RE = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*(?:,\+\d+ more)?")
+
+
+def _coverage_tests(raw: str):
+    """(passed, skipped, total) from the gate's "<passed> <skipped> <total>", or None."""
+    parts = raw.split()
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def _coverage_body(raw_detail: str, pct: str, minimum: str, tests: str, repo: str, head_sha: str) -> list:
+    """The coverage CAUTION lines: measured vs required, why when no test ran,
+    then one line per file with its uncovered line ranges."""
+    header = f"coverage: {pct or '?'}% measured, {minimum or '?'}% required"
+    tally = _coverage_tests(tests)
+    if tally and tally[2] and tally[0] == 0 and tally[1] == tally[2]:
+        noun = "test was" if tally[2] == 1 else "tests were"
+        return [f"{header}. All {tally[2]} {noun} skipped (vm.skip), so no test ran the payload."]
+    if tally and tally[1]:
+        header += f" ({tally[1]} of {tally[2]} tests skipped)"
+    body = [header]
+    # count and ranges never hold "|"; a path may, so split from the right.
+    rows = [row.rsplit("|", 2) for row in raw_detail.splitlines() if row.strip()]
+    rows = [r for r in rows if len(r) == 3 and r[1].isdigit() and _RANGES_RE.fullmatch(r[2])]
+    if rows:
+        body.append("uncovered lines:")
+    for file, count, ranges in rows:
+        first = ranges.split(",", 1)[0].split("-", 1)[0]
+        short = _LABEL_UNSAFE_RE.sub("_", file.rsplit("/", 1)[-1])[:120] or "?"
+        if repo and head_sha:
+            # Percent-encode the path so no character can end the link.
+            url = f"https://github.com/{repo}/blob/{head_sha}/{quote(file, safe='/')}#L{first}"
+            name = f"[{short}]({url})"
+        else:
+            name = short
+        plural = "line" if count == "1" else "lines"
+        body.append(f"  {name}: {ranges} ({count} {plural})")
+    return body
+
+
 def render(
     results: dict,
     details: dict,
@@ -97,6 +144,7 @@ def render(
     repo: str = "",
     head_sha: str = "",
     upstream_pr_line: str = "",
+    coverage_tests: str = "",
 ) -> str:
     lines = ["**Check summary**", ""]
     for name in CHECK_ORDER:
@@ -113,13 +161,8 @@ def render(
             if result == "success":
                 continue
             lines.append("")
-            header = f"coverage: {coverage_pct or '?'}% measured, {coverage_min or '?'}% required"
-            body_lines = [header]
-            if raw_detail:
-                body_lines.append("uncovered lines (sample):")
-                body_lines.extend(f"  {line}" for line in raw_detail.splitlines() if line.strip())
-            safe_lines = [sanitize_markdown(line, 300) for line in body_lines if line.strip()]
-            block = "\n".join(f"> 🔴 {line}" for line in safe_lines) or "> 🔴 (no details captured)"
+            body_lines = _coverage_body(raw_detail, coverage_pct, coverage_min, coverage_tests, repo, head_sha)
+            block = "\n".join(f"> 🔴 {line}" for line in body_lines)
             lines.append(f"> [!CAUTION]\n> **{name} failed**\n{block}")
         elif name in ("address-book", "spelling"):
             table_fn = _render_address_book_table if name == "address-book" else _render_spelling_table
@@ -167,6 +210,7 @@ def main():
         payload.get("repo", ""),
         payload.get("head_sha", ""),
         payload.get("upstream_pr_line", ""),
+        payload.get("coverage_tests", ""),
     )
     sys.stdout.write(out)
 
