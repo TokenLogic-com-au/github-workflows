@@ -5,6 +5,7 @@ of what actually went wrong with file:line links to the PR head. Never
 fails on its own -- called from a job that must post something even when
 every upstream job errored."""
 import sys
+from urllib.parse import quote
 
 from sanitize import sanitize_markdown
 
@@ -106,14 +107,20 @@ def _coverage_body(raw_detail: str, pct: str, minimum: str, tests: str, repo: st
     if tally and tally[1]:
         header += f" ({tally[1]} of {tally[2]} tests skipped)"
     body = [header]
-    rows = [row.split("|", 2) for row in raw_detail.splitlines() if row.strip()]
+    # count and ranges never hold "|"; a path may, so split from the right.
+    rows = [row.rsplit("|", 2) for row in raw_detail.splitlines() if row.strip()]
     rows = [r for r in rows if len(r) == 3]
     if rows:
         body.append("uncovered lines:")
     for file, count, ranges in rows:
         first = ranges.split(",", 1)[0].split("-", 1)[0]
-        short = sanitize_markdown(file.rsplit("/", 1)[-1], 120)
-        name = f"[{short}](https://github.com/{repo}/blob/{head_sha}/{file}#L{first})" if repo and head_sha else short
+        short = sanitize_markdown(file.rsplit("/", 1)[-1], 120).replace("[", "(").replace("]", ")")
+        if repo and head_sha and first.isdigit():
+            # The path is repo content: percent-encode it so no character can end the link.
+            url = f"https://github.com/{repo}/blob/{head_sha}/{quote(file, safe='/')}#L{first}"
+            name = f"[{short}]({url})"
+        else:
+            name = short
         plural = "line" if count == "1" else "lines"
         body.append(f"  {name}: {sanitize_markdown(ranges, 200)} ({sanitize_markdown(count, 10)} {plural})")
     return body

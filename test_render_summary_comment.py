@@ -183,6 +183,26 @@ class RenderTests(unittest.TestCase):
         self.assertIn(f"[Foo.sol](https://github.com/{REPO}/blob/{SHA}/src/x/Foo.sol#L63): 63-104,110,+2 more (21 lines)", out)
         self.assertNotIn("skipped", out)
 
+    def test_coverage_link_path_cannot_close_the_link_or_mention(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        details = {"coverage": "src/dir) @reviewer [x](https://evil.example/)/Foo.sol|1|20"}
+        out = rsc.render(results, details, "83", "100", "", False, REPO, SHA)
+        self.assertIn(
+            f"(https://github.com/{REPO}/blob/{SHA}/src/dir%29%20%40reviewer%20%5Bx%5D%28https%3A//evil.example/%29/Foo.sol#L20)",
+            out)
+        self.assertNotIn("@reviewer", out)
+        self.assertNotIn("](https://evil.example", out)
+
+    def test_coverage_row_with_a_pipe_in_the_path_keeps_count_and_ranges(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        out = rsc.render(results, {"coverage": "src/a|b.sol|1|20"}, "83", "100", "", False, REPO, SHA)
+        self.assertIn(f"/src/a%7Cb.sol#L20): 20 (1 line)", out)
+
+    def test_coverage_non_numeric_anchor_renders_the_name_without_a_link(self):
+        results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
+        out = rsc.render(results, {"coverage": "src/x/Foo.sol|1|x)"}, "83", "100", "", False, REPO, SHA)
+        self.assertIn("> 🔴   Foo.sol: x) (1 line)", out)
+
     def test_coverage_with_every_test_skipped_says_so_instead_of_listing_lines(self):
         results = {**{k: "success" for k in rsc.CHECK_ORDER}, "coverage": "failure"}
         details = {"coverage": "src/x/Foo.sol|20|63-104"}
