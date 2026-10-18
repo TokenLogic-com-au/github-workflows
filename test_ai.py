@@ -20,6 +20,12 @@ class BuildPromptTests(unittest.TestCase):
         self.assertTrue(open_tag < input_pos < close_tag)
         self.assertIn("triaging a newly opened GitHub issue", prompt)  # from prompts/scope.md
 
+    def test_daily_prs_prompt_wraps_the_diff_sections_as_untrusted_data(self):
+        input_text = 'window: a to b\n<pr ref="acme/repo#3" sha="abc" cut="no">\n--- a.py (modified, +1 -0)\n+x\n</pr>\n'
+        prompt = ai.build_prompt("daily-prs", input_text)
+        self.assertTrue(prompt.index("<untrusted-input>") < prompt.index('<pr ref="acme/repo#3"') < prompt.index("</untrusted-input>"))
+        self.assertIn("one line per merged pull request", prompt)  # from prompts/daily-prs.md
+
     def test_review_input_carries_linked_issue_before_diff_in_order(self):
         # Mirrors what ai-comment.yml's collect step assembles for kind=review:
         # the linked issue body, then the (possibly filtered) PR diff, both
