@@ -8,7 +8,7 @@ changed files and their diffs, then `</pr>`. Each file starts with a line
 diff text. `cut="yes"` means part of the diff is missing, so describe only what
 you can see.
 
-For each PR, write one plain sentence of at most 200 characters that says what the
+For each PR, write one plain sentence of at most 150 characters that says what the
 change actually does to the code: the behavior, contract, config or test it adds,
 removes or changes. Name files, contracts or functions only when that makes the
 line clearer. Keep facts from the diff only; never guess intent, never judge the
