@@ -26,18 +26,28 @@ class BuildPromptTests(unittest.TestCase):
         self.assertTrue(prompt.index("<untrusted-input>") < prompt.index('<pr ref="acme/repo#3"') < prompt.index("</untrusted-input>"))
         self.assertIn("one line per merged pull request", prompt)  # from prompts/daily-prs.md
 
-    ALLOWED = "letters, digits, spaces and these characters: . , ; : ' \" ( ) / # & % + = {extra}"
+    EXPECTED_ALLOWED = (
+        set(". , ; : ' \" ( ) / # & % + = _ \u2192 \u2013 \u2014 -".split())
+        | set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        | {" "}
+    )
 
-    def test_daily_prompts_state_the_allowed_set_of_board_app_with_the_underscore(self):
-        for kind, extra, sentence in (("daily-prs", "-", "Use only ASCII"), ("daily", "_ \u2192 \u2013 \u2014 -", "Use ASCII only")):
+    def test_daily_prompts_state_exactly_the_allowed_set_of_board_app(self):
+        marker = "these characters: "
+        for kind in ("daily-prs", "daily"):
             with open(os.path.join(ai.PROMPTS_DIR, f"{kind}.md"), encoding="utf-8") as f:
                 text = f.read()
-            if kind == "daily-prs":
-                self.assertIn("+ = - _\n", text)
-            else:
-                self.assertIn(self.ALLOWED.format(extra=extra), text)
-            self.assertIn(sentence, text)
+            self.assertIn("Use ASCII only, apart from the arrow and dashes listed here", text, kind)
+            line = text[text.index(marker) + len(marker):].split("\n", 1)[0]
+            stated = set(line.split()) | set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") | {" "}
+            self.assertEqual(stated, self.EXPECTED_ALLOWED, kind)
             self.assertNotIn("Never use underscores", text)
+
+    def test_daily_prompt_bans_angle_brackets_and_asks_for_plain_placeholders(self):
+        with open(os.path.join(ai.PROMPTS_DIR, "daily.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("Never use `<`, `>`, backticks or brackets", text)
+        self.assertIn('"the weekday"', text)
 
     def test_daily_prs_prompt_bans_angle_brackets_and_asks_for_plain_placeholders(self):
         with open(os.path.join(ai.PROMPTS_DIR, "daily-prs.md"), encoding="utf-8") as f:

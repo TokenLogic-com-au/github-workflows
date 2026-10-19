@@ -19,7 +19,7 @@ before or after it, in this exact shape:
 `{"prs": [{"ref": "owner/repo#number", "summary": "<one sentence>"}]}`
 Give exactly one entry for each PR in the input, with `ref` copied exactly.
 
-Use only ASCII letters, digits, spaces and these characters: . , ; : ' " ( ) / # & % + = - _
+Use ASCII only, apart from the arrow and dashes listed here: only letters, digits, spaces and these characters: . , ; : ' " ( ) / # & % + = _ → – — -
 A code name such as a variable, file or setting may be written as it appears in the
 diff, underscores included. Never use `<`, `>`, backticks or brackets, and write a
 placeholder in plain words (for example "the weekday"), not in angle brackets. No line

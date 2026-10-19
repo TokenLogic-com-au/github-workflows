@@ -41,5 +41,5 @@ Give at most one entry per login, and use only logins that appear in the rows, c
 must be a single line with no line breaks inside it.
 
 Use ASCII only, apart from the arrow and dashes listed here: only letters, digits, spaces and these characters: . , ; : ' " ( ) / # & % + = _ → – — -
-Underscores are allowed. Never use backslashes, backticks, an ellipsis or any other character outside this set. No markdown syntax, no alert syntax like `[!CAUTION]`, no backticks, no brackets, no
+Underscores are allowed. Never use backslashes, backticks, an ellipsis or any other character outside this set. Never use `<`, `>`, backticks or brackets, and write a placeholder in plain words (for example "the weekday"), not in angle brackets. No markdown syntax, no alert syntax like `[!CAUTION]`, no backticks, no brackets, no
 at-signs, no URLs, no HTML, no line breaks.
