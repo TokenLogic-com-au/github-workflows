@@ -412,31 +412,32 @@ jobs:
             | tar --null -T - --remove-files -cf "$RUNNER_TEMP/committed-diffs.tar" 2>/dev/null || true
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
           mkdir -p diffs
-          # Exactly one CI-written report is trusted; zero or several leave
+          # Every CI-written report is trusted and joined, in name order, into
+          # one report.md under a per-payload heading (a multi-payload
+          # proposal writes one report per payload). Zero reports leaves
           # `report` empty and every consumer falls back to its no-report path.
           produced=$(find diffs -name '*.md' -type f | sort)
           report=""
-          fork_note=""
-          if [ -n "$produced" ] && [ "$(printf '%s\n' "$produced" | wc -l)" -eq 1 ]; then
-            report="$produced"
+          if [ -n "$produced" ]; then
             mkdir -p "$RUNNER_TEMP/ci-diff-report"
-            cp "$report" "$RUNNER_TEMP/ci-diff-report/report.md"
-            echo "ci_report=$RUNNER_TEMP/ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
-          elif [ -n "$produced" ]; then
-            fork_note="fork test wrote several diff reports"
+            report="$RUNNER_TEMP/ci-diff-report/report.md"
+            : > "$report"
+            while IFS= read -r f; do
+              { printf '# Payload report: %s\n\n' "$(basename "$f" .md)"; cat "$f"; printf '\n'; } >> "$report"
+            done <<< "$produced"
+            echo "ci_report=$report" >> "$GITHUB_OUTPUT"
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
-          # No report written -- the fork test itself failed (e.g. a payload
-          # asset's live-mainnet bytecode reverting under the wrong forge
-          # profile). Name the failing test so the advisory comment can say
-          # plainly "the fork test failed" instead of a vague "may not have
-          # completed".
-          if [ -z "$report" ]; then
-            fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
-            echo "fork_test_status=${fork_note:-${fail_test:-forge test failed with no further detail}}" >> "$GITHUB_OUTPUT"
-          else
-            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
+          # Derived from the log whether or not reports exist: a multi-payload
+          # proposal can write some reports while another payload's test
+          # fails. Name the failing test so the advisory comment can say
+          # plainly "the fork test failed". No report and no [FAIL line still
+          # means the forge run itself failed.
+          fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
+          if [ -z "$fail_test" ] && [ -z "$report" ]; then
+            fail_test="forge test failed with no further detail"
           fi
+          echo "fork_test_status=$fail_test" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
         if: steps.diff.outputs.ci_report != ''
         with:
