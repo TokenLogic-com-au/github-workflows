@@ -23,7 +23,7 @@ def _amount_text(item, symbol_map):
     amount = item.get("amount")
     symbol = _token_symbol(item, symbol_map)
     if item.get("decimals") == 0:
-        # decimals 0 means the diff decoder could not resolve them (new aToken): the number is raw
+        # decimals 0 on a token that is not really 0-decimal means the diff decoder could not resolve them (new aToken): the number is raw
         suffix = f" `{symbol}`" if symbol else ""
         return f"{amount}{suffix} (raw, decimals unknown)"
     if symbol:

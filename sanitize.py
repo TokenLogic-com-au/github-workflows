@@ -1,4 +1,4 @@
-"""Sanitizes untrusted model markdown before it is posted as a GitHub comment: strips HTML/images, neutralizes mentions, #refs and alert syntax, de-links non-allowlisted hosts, truncates."""
+"""Sanitizes untrusted model markdown before it is posted as a GitHub comment: strips HTML/images, neutralizes mentions, #refs and alert syntax, de-links non-allowlisted hosts, truncates. The caller adds the dedup marker AFTER sanitizing; the marker is never sanitized itself."""
 import re
 from urllib.parse import urlparse
 

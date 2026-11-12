@@ -26,6 +26,7 @@ defaults:
     shell: bash
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
+  # Pinned to match upstream aave-proposals-v3 CI; newer Foundry refuses non-Ethereum forks.
   FOUNDRY_VERSION: v1.7.1
 jobs:
   scope:
@@ -336,7 +337,7 @@ jobs:
         id: diff
         if: steps.folder.outputs.md != ''
         run: |
-          # Report is always generated here, never taken from the PR (an author-committed diffs/*.md is untrusted); committed ones are set aside first. --isolate is needed for the payload gas-limit check to pass.
+          # Report is always generated here, never taken from the PR (an author-committed diffs/*.md is untrusted); committed ones are set aside first. --isolate is needed: without it the gas-limit check reverts before diffReports() writes any file.
           mkdir -p diffs
           find diffs -name '*.md' -type f -print0 \
             | tar --null -T - --remove-files -cf "$RUNNER_TEMP/committed-diffs.tar" 2>/dev/null || true
