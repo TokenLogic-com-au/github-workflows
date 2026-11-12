@@ -1,43 +1,16 @@
-"""Deterministic forum-vs-payload comparison. Takes the model's forum-side
-JSON extraction and the diff-report's deterministically parsed payload-side
-list (diff_parser.parse_payload_actions) and produces:
+"""Deterministic forum-vs-payload comparison.
 
-- warnings: payload item matched to a forum item, but amount/recipient/
-  decimals disagree (rendered [!WARNING])
-- unexplained: payload item with NO forum counterpart at all -- the
-  dangerous case (rendered [!WARNING], 🟠, as a plain-language finding via
-  readable_actions.py rather than a raw amount/recipient line)
-- forum_only / forum_only_count: forum items with no payload counterpart -- expected
-  noise when a forum post covers a whole funding update split across many
-  payloads, rendered as one neutral collapsed line, never a warning.
-- notes: payload item matched to a forum item whose amount is a formula
-  (e.g. "currentAllowance + 50,500 / 4 + emissionPerSecond x (...)") rather
-  than a literal number -- the first number in a formula is not the total,
-  so it must never be compared against the payload's decoded amount; these
-  are rendered as a neutral note instead of a warning.
-
-No network call, no AI: this is the part that must be exactly reproducible.
+Outputs: warnings (matched item, amount/recipient/decimals disagree), unexplained (payload item
+with no forum counterpart), forum_only (neutral, expected when a post spans many payloads),
+notes (forum amount is a formula, so it is never compared to the decoded amount).
 """
 import re
 
 SEED_RECIPIENT_MARKER = "executor"
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
-# An arithmetic operator only counts as formula evidence when it has
-# whitespace on both sides -- " + ", " - ", " * ", " / ", " x ", " × " --
-# so an adjacent unit/rate shape like "50k GHO/month" (no surrounding
-# whitespace around the slash) is not mistaken for a formula.
+# Operators need whitespace on both sides so "50k GHO/month" is not a formula.
 _OPERATOR_RE = re.compile(r"\s[+\-*/×x]\s", re.IGNORECASE)
-# A dotted or underscored identifier (block.timestamp, snake_case) is
-# unambiguous formula evidence. A camelCase identifier is too, but only
-# counting "word-like humps" -- a lowercase run followed by an uppercase
-# letter that is ITSELF followed by a lowercase letter (i.e. a capitalized
-# word, like ...Allowance, ...Second) -- and only with two or more such
-# humps. An ERC20/Aave token symbol (aEthWBTC, stkAAVE, aEthUSDC) has at
-# most one: the "Eth" mid-token is a single hump, and an all-caps suffix
-# (WBTC, AAVE, USDC) is never itself a hump since no lowercase follows the
-# uppercase run. "currentAllowance" and "emissionPerSecond" both carry
-# real English words after their humps and appear in practice alongside an
-# operator anyway, so this is belt-and-braces, not the primary signal.
+# Dotted/underscored identifiers and 2+ camelCase word humps are formula evidence; token symbols (aEthWBTC, stkAAVE) have at most one hump.
 _DOTTED_OR_UNDERSCORED_RE = re.compile(r"[A-Za-z][._][A-Za-z]")
 _CAMEL_HUMP_RE = re.compile(r"(?=[a-z][A-Z][a-z])")
 
@@ -130,10 +103,7 @@ def compare(forum_items, payload_items):
 
 
 def pop_seed_forum_item(forum_only, asset_symbol):
-    """Removes and returns the first unmatched forum item that deposits
-    `asset_symbol` to an executor (the forum's wording of a listing seed,
-    which names no address), or None. Amounts are never compared: the forum
-    states them in USD, the payload in tokens."""
+    """Pops the first unmatched forum item depositing `asset_symbol` to an executor, else None; amounts are not compared (forum says USD)."""
     wanted = (asset_symbol or "").casefold()
     for i, f in enumerate(forum_only):
         if (f.get("asset") or "").casefold() == wanted and SEED_RECIPIENT_MARKER in (

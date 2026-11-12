@@ -1,15 +1,4 @@
-"""Turns diff_parser payload items into plain-language findings -- what the
-payload action IS, in address-book names, token and amount -- instead of
-raw `amount X, recipient 0x...` lines. Recognizes the common protocol
-patterns (a new-listing seed: approve -> supply on behalf of X -> aToken
-mint; an approval reset to 0) and groups a seed's events into one summary
-line, keeping the underlying events listed beneath it. Any event that
-matches none of these still gets a readable line built from its event
-name, token/contract label, and amount -- never a silent drop, except a
-`ReserveDataUpdated` accounting line, which build_readable_findings omits
-by design (the caller reports its count separately, see
-diff_parser.count_reserve_data_updates).
-"""
+"""Turns diff_parser payload items into plain-language findings; ReserveDataUpdated lines are omitted (counted separately)."""
 from address_book import describe_address
 
 LISTING_SEED_KIND = "Listing seed"
@@ -34,29 +23,16 @@ def _amount_text(item, symbol_map):
     amount = item.get("amount")
     symbol = _token_symbol(item, symbol_map)
     if item.get("decimals") == 0:
-        # decimals: 0 on a token that is not genuinely a 0-decimal asset
-        # means the diff report's decoder could not resolve the real
-        # decimals (typical for a brand-new aToken in a listing) -- the
-        # displayed number really is the raw, unscaled integer.
+        # decimals 0 on a token that is not really 0-decimal means the diff decoder could not resolve them (new aToken): the number is raw
         suffix = f" `{symbol}`" if symbol else ""
         return f"{amount}{suffix} (raw, decimals unknown)"
     if symbol:
         return f"{amount} `{symbol}`"
-    # decimals are known and diff_parser's own "human" group is already the
-    # correctly-scaled amount -- there is nothing raw about it, it just has
-    # no token name to show.
     return amount
 
 
 def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=None) -> str:
-    """The generic-fallback-inclusive readable line for one payload item:
-    event name, labelled address fields, and amount -- used directly for
-    anything outside the recognized patterns, and to build each seed
-    group's sub-lines. `solidity_labels`/`chain` (from
-    address_book.load_solidity_labels/infer_chain) are an optional second
-    naming source for a party the diff report itself never labelled (no
-    `####`/`###` section of its own) -- omitting them just falls back to
-    the full address, exactly like before this source existed."""
+    """Readable line for one payload item; `solidity_labels`/`chain` name parties the diff report never labelled."""
     event_name = item.get("event_name") or item.get("action")
     recipient = item.get("recipient")
     counterparty = item.get("counterparty")
@@ -90,33 +66,10 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
 def find_seed_groups(
     items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
-    """A seed flow is: a Supply, on behalf of some beneficiary, paid for by
-    a payer (the Supply's own `user` field) -- matched to:
+    """Groups a Supply with the Approval, Transfer and aToken mint that fund it (same payer, pool, reserve, amount).
 
-    - an Approval emitted on the reserve's own token section, whose
-      spender is the Supply's own pool (the Supply's `section`), whose
-      owner is the Supply's payer, and whose amount equals the supplied
-      amount;
-    - a Transfer, also on the reserve's own token section, from that same
-      payer to the reserve's aToken, for the same amount;
-    - the aToken's own from-zero Transfer (the mint) to the Supply's
-      beneficiary.
-
-    Every field is checked explicitly so an unrelated Approval sitting in
-    the same token section (a different spender, a different owner, or a
-    different amount) is never swept into the group -- it stays its own
-    finding.
-
-    diff_parser's fallback address extraction happens to put the reserve's
-    own address in a Supply item's `recipient` field (the first 0x address
-    on a `Supply(reserve: 0x..., onBehalfOf: ..., ..., user: 0x..., ...)`
-    line, since it has no `to:` label) -- that quirk is exactly the key
-    used to find the Approval/Transfer on the same reserve.
-
-    The exact same event shape also happens on an ALREADY-listed reserve
-    (e.g. a funding update reinvesting swapped fees) -- only a reserve
-    named under this report's own "### Reserves added" section is a real
-    new-listing seed; anything else is worded as an ordinary supply flow.
+    A Supply's `recipient` is the reserve address (first address on the line, no `to:`), the key used to find
+    its Approval/Transfer. Only a reserve under "### Reserves added" is a listing seed; others are supply flows.
     """
     groups = []
     used_ids = set()
@@ -218,16 +171,7 @@ def find_seed_groups(
 def build_readable_findings(
     items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
 ):
-    """Returns [{"line": str, "sub_lines": [str, ...]}] covering every item
-    in `items` except a `ReserveDataUpdated` accounting line (protocol
-    bookkeeping -- a rate/liquidity index -- never a payment; the caller
-    reports how many were omitted separately, counted from the raw diff
-    report rather than this deduped `items` list, since the same index can
-    legitimately update more than once in one execution). A seed flow (a
-    new listing, or an ordinary supply into an existing reserve) collapses
-    into one summary line with its underlying events as sub_lines;
-    everything else (including any event outside the recognized patterns)
-    gets its own single-line description."""
+    """Returns [{"line", "sub_lines"}] per item, skipping ReserveDataUpdated; seed flows collapse into one line."""
     seed_groups = find_seed_groups(
         items, label_map, symbol_map, new_reserves, solidity_labels, chain
     )

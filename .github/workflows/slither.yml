@@ -1,7 +1,5 @@
 name: slither
-# Advisory-only static analysis for Foundry repos: runs Slither and uploads its findings as
-# code-scanning annotations. Never blocks a PR or a merge -- every step that can fail is
-# `continue-on-error: true`, and there is no coverage-gate-style threshold to fail against.
+# Advisory Slither: every failing step is continue-on-error, never blocks.
 on:
   workflow_call:
     inputs:

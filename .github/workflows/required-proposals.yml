@@ -1,6 +1,5 @@
 name: required-proposals
-# Required by the proposal-checks org ruleset. PR comments post only when the
-# target repo sets PROPOSAL_CHECKS_LIVE=true.
+# Org-ruleset entry point; PR comments post only when PROPOSAL_CHECKS_LIVE=true.
 on:
   pull_request:
   merge_group:

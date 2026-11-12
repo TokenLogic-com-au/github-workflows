@@ -1,23 +1,4 @@
-"""Sanitizes untrusted AI/model markdown before it is posted as a GitHub PR
-or issue comment, so it can be rendered as real markdown (tables included)
-instead of dumped inside a ```text fence. Shared by ai-comment.yml's review
-comment and proposal-checks.yml's advisory comment -- one implementation,
-not two copies of the same rules in YAML.
-
-Rules (in order):
-1. Strip raw HTML tags and HTML comments. (Our own dedup marker is added by
-   the caller AFTER sanitizing, never sanitized itself.)
-2. Drop markdown images (`![alt](url)`) entirely -- alt text only, no image.
-3. Neutralize `@mentions` with a zero-width space so they don't ping anyone.
-4. Neutralize `#123`-style references with a zero-width space. The model's
-   output is never a deliberate same-repo issue/PR reference (it is
-   analyzing forum/proposal content, not this repo's issues), and whether a
-   bare `#123` would resolve inside or outside the current repo cannot be
-   determined from the text alone, so every one is neutralized.
-5. Markdown links (`[text](url)`) whose host is not in ALLOWED_LINK_HOSTS
-   are rewritten to plain `text` (the URL is dropped, not just hidden).
-6. Truncate to max_len characters.
-"""
+"""Sanitizes untrusted model markdown before it is posted as a GitHub comment: strips HTML/images, neutralizes mentions, #refs and alert syntax, de-links non-allowlisted hosts, truncates. The caller adds the dedup marker AFTER sanitizing; the marker is never sanitized itself."""
 import re
 from urllib.parse import urlparse
 
@@ -27,7 +8,6 @@ ALLOWED_LINK_HOSTS = {
     "snapshot.org",
     "app.aave.com",
     "etherscan.io",
-    # other chain explorers used across our proposal repos
     "arbiscan.io",
     "basescan.org",
     "snowtrace.io",
@@ -46,10 +26,7 @@ _IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MENTION_RE = re.compile(r"@(?=\w)")
 _ISSUE_REF_RE = re.compile(r"#(?=\d)")
 _REF_DEF_RE = re.compile(r"^\[([^\]]+)\]:\s*(https?://\S+).*$", re.MULTILINE)
-# Matches, in one left-to-right pass, every shape a URL can appear in: an
-# inline link (optionally titled), a reference-style definition line, a
-# reference-style usage, or a bare URL. One pass means a URL already
-# consumed as part of a link never gets re-matched as a "bare" one.
+# One pass over every URL shape so a URL consumed by a link is not re-matched as bare.
 _LINK_RE = re.compile(
     r"(?P<inline>\[(?P<itext>[^\]]*)\]\((?P<iurl>https?://[^)\s]+)(?:\s+\"[^\"]*\")?\))"
     r"|(?P<refdef>^\[(?P<drefname>[^\]]+)\]:\s*(?P<durl>https?://\S+).*$)"
@@ -78,10 +55,7 @@ def _neutralize_issue_refs(text: str) -> str:
 
 
 def _neutralize_alert_syntax(text: str) -> str:
-    # GitHub renders `> [!NOTE]` / `[!WARNING]` / `[!CAUTION]` (etc.) as
-    # colored alert blocks. Only OUR code (advisory_render.py) is allowed to
-    # emit those, built from parsed, structured data -- never from raw model
-    # text, or the model could paint its own output red/orange at will.
+    # Only our renderer may emit GitHub alert blocks, never raw model text.
     return _ALERT_SYNTAX_RE.sub(lambda m: "[" + ZERO_WIDTH_SPACE + "!" + m.group(1) + "]", text)
 
 
@@ -100,7 +74,7 @@ def _delink_disallowed_hosts(text: str) -> str:
             link_text, url = m.group("itext"), m.group("iurl")
             if _is_allowed_host(url):
                 return m.group(0)
-            return link_text  # empty text drops the URL too, never falls back to it
+            return link_text
         if m.group("refdef"):
             return m.group(0) if _is_allowed_host(m.group("durl")) else ""
         if m.group("refuse"):
