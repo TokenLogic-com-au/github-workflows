@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Decides which proposal folder(s) a PR touches, from a list of changed
-files (base..head, `git diff --name-only`, works for added/modified/deleted
-files since git reports only the final path for each).
-
-A "proposal folder" is a first-level directory under src/ matching the
-YYYYMMDD_ naming convention every proposal folder uses (src/<dir>/...).
-A changed file directly under src/, or under a non-dated src/ subfolder
-(e.g. src/interfaces/, src/helpers/ -- shared code, not a proposal payload),
-is ignored: it can't be scoped to a single payload.
-
-One source of truth for this decision: the proposal-checks workflow's
-`scope` job uses it to gate every other job, and the (now-removed) advisory
-job's own folder-detection step used to duplicate this logic.
-"""
+"""Lists the src/YYYYMMDD_* proposal folders touched by a changed-file list (stdin, one path per line)."""
 import json
 import re
 import sys
@@ -28,10 +15,10 @@ def changed_proposal_dirs(changed_files):
             continue
         rest = f[len("src/"):]
         if "/" not in rest:
-            continue  # file directly under src/, not inside a proposal folder
+            continue
         folder = rest.split("/", 1)[0]
         if not PROPOSAL_FOLDER.match(folder):
-            continue  # a shared src/ subfolder (interfaces/, helpers/, …), not a proposal
+            continue
         dirs.add(f"src/{folder}")
     return sorted(dirs)
 

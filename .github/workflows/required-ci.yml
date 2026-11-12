@@ -1,7 +1,5 @@
 name: required-ci
-# Entry point for an organisation ruleset ("Require workflows to pass before merging"):
-# repositories under the ruleset hold no workflow files, so this file supplies the trigger.
-# Rulesets can't pass per-repo inputs, so foundry-ci runs with its defaults.
+# Org-ruleset entry point: rulesets cannot pass per-repo inputs, so foundry-ci runs with defaults.
 on:
   pull_request:
   merge_group:

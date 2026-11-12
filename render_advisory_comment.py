@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the proposal-checks advisory comment body: deterministic
-comparison (spec_compare) of the model's strict-JSON forum extraction
-against the diff report's deterministically parsed payload actions
-(diff_parser), rendered as alert blocks the model cannot forge itself.
-"""
+"""Builds the advisory comment: spec_compare of the forum extraction vs diff_parser actions, as alert blocks the model cannot forge."""
 import json
 import sys
 from collections import Counter
@@ -15,22 +11,14 @@ import spec_compare
 from sanitize import sanitize_markdown
 
 SCALE_OUTPUT_CAP = 4000
-# A readable finding line now always carries full, unshortened addresses
-# (address_book.describe_address) -- 300 chars was tight enough to cut a
-# seed summary mid-word ("... (raw, d"). 800 comfortably fits the longest
-# real line across every committed fixture (the PR #231 seed summary, the
-# longest, is well under 400) with headroom for a busier proposal, while
-# still guarding against a pathological/adversarial input.
+# Fits the longest fixture seed summary (<400) with headroom; bounds adversarial input.
 FINDING_LINE_CAP = 800
 SEED_NOTE_PREFIX = "Listing seed (required for every new listing): "
 NO_SEED_FORUM_LINE = "Forum: no seed deposit found in the forum post"
 
 
 def _truncate_at_word_boundary(text: str, max_len: int) -> str:
-    """Cuts `text` to at most `max_len` chars at the last whitespace
-    boundary and appends "…", instead of slicing mid-word. `text` is
-    assumed already <= max_len is not required -- this both shortens and
-    cleans up a hard cut a prior step may have made."""
+    """Cuts to `max_len` at the last whitespace and appends an ellipsis."""
     if len(text) <= max_len:
         return text
     cut = text[: max_len - 1]
@@ -58,9 +46,7 @@ def _parse_forum_json(ai_out_text: str):
 
 
 def render_pr_description_alert(unresolved_items: list) -> str:
-    """Flags an unfinished fork PR description -- an unedited PR-template
-    line, or an unticked checklist box -- still in the way of the Upstream
-    PR prefill (upstream_pr.find_unresolved_template_items)."""
+    """Warns about unfinished PR-template lines or unticked boxes blocking the Upstream PR prefill."""
     if not unresolved_items:
         return ""
     lines = [f"> 🟠 {sanitize_markdown(item, 200)}" for item in unresolved_items[:10]]
@@ -95,14 +81,10 @@ def _forum_seed_line(forum_item) -> str:
 
 
 def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain):
-    """Proves the listing seeds over ALL payload items, before the forum
-    compare, so the forum post can never choose which group counts as the
-    seed. A group is proven when it is a listing seed whose beneficiary the
-    address book names DUST_BIN and whose pool it names POOL; a reserve's
-    group is taken only when it has exactly one proven group (two or more
-    stay in the payload items and go through the compare as warnings).
-    Returns (seed_groups, remaining_payload_items). Without an address book
-    nothing is taken, so every seed stays a warning."""
+    """Proves listing seeds over all payload items before the forum compare, so the forum cannot choose the seed.
+
+    Proven: beneficiary is DUST_BIN and pool is POOL in the address book; taken only when a reserve has exactly one.
+    """
     proven = [
         group
         for group in readable_actions.find_seed_groups(
@@ -121,11 +103,7 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
 
 
 def compare_around_seeds(forum_items, seed_groups, remaining_items):
-    """Compares the forum against the taken seed groups' members first, then
-    the remaining payload items against the forum items left over, so the
-    payload's event order cannot let a seed's forum items explain another
-    movement. The seed members' own `unexplained` is dropped on purpose (the
-    seed proof explains them); their warnings and notes are kept."""
+    """Seed members compare first so event order cannot let a seed explain another movement; their `unexplained` is dropped (seed proof covers it)."""
     seed_members = [member for group in seed_groups for member in group["members"]]
     seed_cmp = spec_compare.compare(forum_items, seed_members)
     comparison = spec_compare.compare(seed_cmp["forum_only"], remaining_items)
@@ -137,8 +115,7 @@ def compare_around_seeds(forum_items, seed_groups, remaining_items):
 
 
 def pair_seed_notes(seed_groups, forum_only):
-    """Pairs each taken seed group with at most one unmatched forum item.
-    Returns (seed_notes, remaining_forum_only); `forum_only` is not modified."""
+    """Pairs each seed group with at most one unmatched forum item; returns (seed_notes, remaining_forum_only)."""
     forum_left = list(forum_only)
     seed_notes = []
     for group in seed_groups:
@@ -160,18 +137,12 @@ def _render_seed_notes(seed_notes) -> str:
 def render_comparison_alerts(
     comparison: dict, readable_findings: list, omitted_index_updates: int = 0, seed_notes: list = ()
 ) -> str:
-    """`readable_findings` is required (not `None`-defaulted): a caller
-    that forgets to build it must fail loudly, not silently print "No
-    mismatches found" while `comparison["unexplained"]` is nonempty."""
+    """`readable_findings` is required so a forgotten build fails loudly instead of printing "No mismatches found"."""
     blocks = []
     if readable_findings:
         lines = []
         for finding in readable_findings:
-            # sanitize BEFORE the word-boundary cut, uncapped (its own
-            # default max_len is a generous 20000) -- if it cut to
-            # FINDING_LINE_CAP itself first, the result would already sit
-            # exactly at the cap and look "not over it" to the boundary
-            # cut below, silently keeping the mid-word truncation.
+            # sanitize first and uncapped, else the cut already sits at the cap and the boundary cut is skipped
             raw = f"> 🟠 In payload but not in the forum post: {finding['line']}"
             lines.append(_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP))
             for sub in finding.get("sub_lines", []):
@@ -250,8 +221,6 @@ def build(
 
     label_map, symbol_map = address_book.build_maps(diff_report_text)
     new_reserves = address_book.new_reserves(diff_report_text)
-    # A missing/empty address_book_root degrades to {} (no book) rather than
-    # raising -- callers that don't pass one at all get today's behaviour.
     solidity_labels = address_book.load_solidity_labels(address_book_root)
     chain = address_book.infer_chain(diff_report_text)
     seed_groups, remaining_items = take_proven_listing_seeds(
@@ -263,9 +232,7 @@ def build(
     )
     seed_notes, forum_only = pair_seed_notes(seed_groups, comparison["forum_only"])
     comparison = {**comparison, "forum_only": forum_only, "forum_only_count": len(forum_only)}
-    # Counted from the RAW diff report, not the deduped `payload_items` --
-    # the same reserve index can legitimately update more than once in one
-    # execution, and each occurrence was real, omitted activity.
+    # raw report, not deduped items: an index can update more than once
     omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
     parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates, seed_notes))
     parts.append("")
@@ -280,8 +247,6 @@ def main():
     fork_status_path = sys.argv[5] if len(sys.argv) > 5 else None
     pr_body_path = sys.argv[6] if len(sys.argv) > 6 else None
     pr_template_path = sys.argv[7] if len(sys.argv) > 7 else None
-    # Optional and additive: an absent arg (old callers) degrades to no
-    # Solidity address-book source, never an error.
     address_book_root = sys.argv[8] if len(sys.argv) > 8 else None
     with open(ai_out_path, encoding="utf-8") as f:
         ai_out_text = f.read()

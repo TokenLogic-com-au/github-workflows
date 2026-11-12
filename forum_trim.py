@@ -1,14 +1,4 @@
-"""Deterministically trims a governance forum post down to its Motivation,
-Specification and Next Steps sections before it goes to the model -- cuts
-token usage on long funding-update posts that cover many payloads, while
-keeping the seed-deposit sentence a listing post states under Next Steps.
-Each wanted heading starts a section that runs to the next heading of the
-same or higher level; the sections are joined in document order, and a
-wanted heading nested inside another wanted section is not repeated. Next
-Steps is only an addition: the full post is returned unless a Motivation or
-Specification heading is found, so a differently-formatted post is never
-silently truncated.
-"""
+"""Trims a forum post to its Motivation, Specification and Next Steps sections; returns the full post if no Motivation/Specification heading exists."""
 import re
 
 HEADING_RE = re.compile(r"^(#{1,6})\s*(.*)$", re.MULTILINE)

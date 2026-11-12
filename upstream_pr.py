@@ -1,16 +1,4 @@
-"""Builds the "Upstream PR" line for the proposal-checks summary comment: a
-prefilled compare-across-forks link (or, once one exists, a direct link to
-the already-open upstream PR) from this fork's proposal branch to its
-upstream parent repo. The prefilled body is the fork PR's own description,
-verbatim -- never AI-generated or reworded.
-
-Also flags an unfinished fork PR description (an unedited template line, or
-a checklist box still unticked) so the advisory comment can warn about it
-before the upstream PR gets a half-written body.
-
-Pure/no-network -- the gh lookups (parent repo, an existing upstream PR) and
-the fork PR's body/template text are read by the caller and passed in.
-"""
+"""Builds the "Upstream PR" line for the summary comment: a prefilled compare link (or the existing upstream PR) from the fork branch to its parent; pure, no network."""
 import re
 from urllib.parse import urlencode
 
@@ -24,26 +12,17 @@ _HEADING_RE = re.compile(r"^#{1,6}\s")
 
 
 def pick_upstream_pr(prs: list) -> dict:
-    """Picks which upstream PR the summary line should point to, when more
-    than one PR on the parent already has this fork's branch as its head: an
-    OPEN one wins regardless of age, otherwise the most recently updated one.
-    Returns None for an empty/falsy list."""
+    """Open PR wins regardless of age, else the most recently updated; None if empty."""
     if not prs:
         return None
     return sorted(prs, key=lambda p: (p.get("state") == "open", p.get("updated_at") or ""), reverse=True)[0]
 
 
 def find_unresolved_template_items(pr_body: str, template: str) -> list:
-    """Returns the fork PR body's lines that still look like unfinished
-    template boilerplate: a line copied verbatim from the repo's PR template,
-    or an unticked `- [ ]` checklist box. Empty when the body has none, or
-    when there's no body/template to compare."""
+    """Body lines copied verbatim from the PR template, or unticked `- [ ]` boxes."""
     if not pr_body:
         return []
-    # Headings (e.g. "### Pre-review checklist:") are expected to survive
-    # unedited in a fully-filled-out body -- only compare non-heading
-    # template lines (instructional text, unticked checklist bullets) for
-    # a verbatim match.
+    # Headings legitimately survive unedited, so only non-heading template lines are compared.
     template_lines = {
         line.strip()
         for line in (template or "").splitlines()

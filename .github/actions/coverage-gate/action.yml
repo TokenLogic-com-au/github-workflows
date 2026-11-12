@@ -47,12 +47,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # Split into measure (always succeeds) + enforce (fails the gate): a
-    # composite-action step that exits non-zero does not reliably propagate
-    # the outputs it wrote via GITHUB_OUTPUT beforehand (observed empirically
-    # -- "Set output 'pct'" never appears in the runner log for a failing
-    # step), so the threshold failure must live in a step AFTER outputs are
-    # already recorded by a step that exits 0.
+    # Measure/enforce split: a failing composite step can lose GITHUB_OUTPUT, so the threshold check runs after outputs are recorded.
     - id: measure
       shell: bash
       env:
@@ -87,11 +82,7 @@ runs:
           UNCOVERED_FILE=uncovered.txt awk -f "$GITHUB_ACTION_PATH/coverage.awk" lcov.info
         )
         uncovered="$(cat uncovered.txt)"
-        # base64-encoded single-line output: the multi-line `name<<EOF ... EOF`
-        # form was observed to fail delimiter matching on this runner
-        # ("Invalid value. Matching delimiter not found") for non-trivial
-        # content, silently dropping the output. base64 sidesteps that
-        # entirely; the summary job decodes it back.
+        # base64: multi-line `name<<EOF` output failed delimiter matching on this runner and dropped the output.
         echo "uncovered=$(printf '%s' "$uncovered" | base64 -w0)" >> "$GITHUB_OUTPUT"
         if [ "$total" -eq 0 ]; then
           echo "pct=" >> "$GITHUB_OUTPUT"

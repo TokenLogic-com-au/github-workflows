@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
-# Local dev harness for the proposal-checks advisory step: lets you iterate
-# on the prompt/renderer without a GitHub Actions round-trip.
-#
-# Usage: dev/run-proposal-checks-locally.sh <path-to-proposal-repo> <proposal-folder-under-src>
-# Example: dev/run-proposal-checks-locally.sh ~/proposals 20260910_AaveV3Ethereum_AugSepFundingUpdatePart1
-#
-# Secrets: reads RPC_MAINNET and OPENROUTER_API_KEY BY NAME from the file at
-# $ENV_FILE (default: ~/.env; never prints them). OPENROUTER_MODEL must also
-# be set in the environment (no default model). If RPC_MAINNET generation
-# fails (e.g. a live-mainnet-state revert unrelated to the payload), falls
-# back to any already-committed diffs/*.md for that proposal, and failing
-# that, runs the comparison with an empty payload side (the renderer says so
-# plainly rather than fabricating data).
+# Local harness for the advisory step.
+# Usage: dev/run-proposal-checks-locally.sh <proposal-repo> <proposal-folder-under-src>
+# Reads RPC_MAINNET, OPENROUTER_API_KEY and OPENROUTER_MODEL from $ENV_FILE (default ~/.env).
+# Falls back to a committed diffs/*.md, then to an empty payload side.
 set -euo pipefail
 
 WORKFLOWS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -88,8 +79,7 @@ else
 fi
 
 echo "== rendering ==" >&2
-# 8th arg: the address-book root, like CI (proposal-checks.yml) -- degrades
-# to no Solidity naming source if the submodule isn't checked out here.
+# 8th arg: address-book root; empty if the submodule is absent.
 BOOK_ROOT="$REPO_DIR/lib/aave-helpers/lib/aave-address-book"
 [ -d "$BOOK_ROOT" ] || BOOK_ROOT=""
 python3 render_advisory_comment.py "$OUT_DIR/ai-out.md" "$DIFF_FILE" "$OUT_DIR/scale-out.txt" "$OUT_DIR/advisory-body.md" "" "" "" "$BOOK_ROOT"

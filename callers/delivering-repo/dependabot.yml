@@ -1,9 +1,4 @@
-# Template for a delivering repo's own `.github/dependabot.yml` (NOT `.github/workflows/` --
-# Dependabot config lives at the repo root's `.github/` directory, read natively by GitHub, no
-# workflow_call and no caller/reusable-workflow split for this one).
-#
-# Covers github-actions and gitsubmodule (forge libraries) on weekly schedule. npm is intentionally
-# left out (aave-address-book disabled it: updates spammed the repo).
+# Template for a repo's own .github/dependabot.yml (not a workflow). github-actions and gitsubmodule weekly; npm left out (updates spammed the repo).
 version: 2
 updates:
   - package-ecosystem: "github-actions"

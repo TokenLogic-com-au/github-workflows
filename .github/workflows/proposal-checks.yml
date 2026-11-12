@@ -1,8 +1,5 @@
 name: proposal-checks
-# Blocking: coverage (#4).
-# Warnings (findings reported, never blocks): address-book (#5), spelling (#2).
-# Advisory (never blocks): forum-vs-diff spec check (#3) + decimals sanity (#1),
-# posted as one PR comment, AI output never treated as approval.
+# Blocking: coverage. Warnings: address-book, spelling. Advisory: forum-vs-diff and decimals check, never approval.
 on:
   workflow_call:
     inputs:
@@ -20,12 +17,7 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: false
-      # Per-chain explicit RPC override consumed by action-rpc-env (it checks
-      # RPC_<SYMBOL> before falling back to Alchemy). Optional: empty means
-      # fall back to Alchemy. Only Monad needed so far, since Alchemy's Monad
-      # endpoint lacks archive coverage; add another RPC_<CHAIN> secret here
-      # (and to the matching action-rpc-env step's env) the same way if a
-      # future chain needs the same override.
+      # Optional per-chain RPC override, checked by action-rpc-env before Alchemy (Alchemy Monad lacks archive).
       RPC_MONAD:
         required: false
 permissions: {}
@@ -37,13 +29,7 @@ env:
   FOUNDRY_VERSION: v1.7.1
 jobs:
   scope:
-    # One proposal per PR: computes the single src/<dir>/ this PR touches so
-    # every other job scopes its checks to it instead of the whole repo (src/
-    # holds hundreds of past proposals, so an unscoped coverage/test run is
-    # both slow and fails 100% on old ones). count==0 short-circuits every
-    # other job to skipped (still a green required check -- GitHub treats a
-    # skipped job as passing); count>1 fails this job outright, which fails
-    # the required check.
+    # Scopes every job to the single src/<dir>/ the PR touches: count==0 skips all (green), count>1 fails.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -85,9 +71,7 @@ jobs:
           esac
 
   address-book:
-    # Waits for advisory only to consume the diff report CI itself generated
-    # there (artifact ci-diff-report); runs even when advisory failed or was
-    # skipped, in which case every unknown address stays a warning.
+    # Consumes the diff report advisory generated; runs even if advisory failed, then unknown addresses stay warnings.
     needs: [scope, advisory]
     if: ${{ !cancelled() && needs.scope.outputs.count == '1' }}
     runs-on: ubuntu-latest
@@ -116,22 +100,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
-          # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
-          # ignored -- they document an address, they don't use one on-chain.
-          # Upstream aave-proposals-v3 pins aave-address-book only as a nested
-          # submodule of aave-helpers (lib/aave-helpers/lib/aave-address-book) -- a
-          # second, independently-pinned top-level copy caused a real forge remapping
-          # clash against aave-helpers' own ProtocolV3TestBase, so this replica
-          # follows upstream's single-copy layout.
-          #
-          # This step always exits 0 (see "enforce" below): a step that exits
-          # non-zero here was observed to lose its GITHUB_OUTPUT writes on this
-          # runner (a `grep -q`-closed-early pipe threw a broken-pipe SIGPIPE
-          # under `set -o pipefail`, and the resulting non-zero exit corrupted
-          # the multi-line output write) -- splitting measurement (always
-          # succeeds) from enforcement (fails the job) avoids that class of bug
-          # entirely, same fix as coverage-gate's measure/enforce split.
+          # src/**/*.sol minus *.t.sol; addresses only on a `//` comment line are ignored.
+          # One nested address-book copy under aave-helpers, as upstream; a second copy clashed in forge remappings.
+          # Always exits 0: a non-zero exit here lost GITHUB_OUTPUT writes on this runner (SIGPIPE from grep -q under pipefail).
           book=$(find lib/aave-helpers/lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
           if [ -z "$book" ]; then
             echo "lib/aave-helpers/lib/aave-address-book not found; is the submodule checked out recursively?"
@@ -140,16 +111,9 @@ jobs:
             exit 0
           fi
           book_text_lc=$(cat $book | tr 'A-F' 'a-f')
-          # An asset this proposal lists gets its underlying/oracle added to the
-          # book only after the listing executes, so those addresses are shown
-          # as a notice rather than a warning. Only the diff report CI itself
-          # generated (advisory job artifact) is trusted to say which addresses
-          # those are -- never one the PR author committed (advisory sets those
-          # aside before its fork test). Anything but exactly
-          # one downloaded file fails closed: every unknown address is a warning.
+          # A listed asset reaches the book only after execution, so its addresses are a notice. Only the CI-generated diff report is trusted for that; exactly one file or fail closed.
           report=""
-          # Read only from the runner's temp dir: a workspace path could be
-          # pre-populated by a file the PR committed.
+          # Runner temp dir only: a workspace path could be pre-populated by the PR.
           dl="$RUNNER_TEMP/ci-diff-report"
           if [ -d "$dl" ] && [ "$(find "$dl" -type f | wc -l)" -eq 1 ]; then
             report=$(find "$dl" -type f)
@@ -206,9 +170,7 @@ jobs:
         env:
           STATUS: ${{ steps.measure.outputs.status }}
         run: |
-          # Non-blocking: findings are reported above and in the summary
-          # comment, but no longer fail the job. Only an actual error state
-          # (book not found) still blocks.
+          # Non-blocking; only a real error (book not found) fails.
           case "$STATUS" in
             ok) exit 0 ;;
             found) echo "unrecognized raw addresses found (non-blocking warning)"; exit 0 ;;
@@ -231,8 +193,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
-          # The calling repo's package.json may declare pnpm; v5 would then try to
-          # cache pnpm, which isn't installed. cspell runs via npx, no cache needed.
+          # Caller's package.json may declare pnpm, which v5 would try to cache; cspell runs via npx.
           package-manager-cache: false
       - name: cspell on changed proposal .md files
         id: check
@@ -240,12 +201,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Picked cspell over rojopolis/spellcheck-github-actions: rojopolis'
-          # pyspelling config takes static source globs, so limiting it to only
-          # this PR's changed files means rewriting its config every run.
-          # cspell takes a file list straight from argv, so `git diff
-          # --name-only` feeds it directly, and -c points at config that lives
-          # in github-workflows (checked out above), not duplicated per repo.
+          # cspell takes the changed-file list from argv and its config lives in github-workflows.
           files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.md')
           if [ -z "$files" ]; then
             echo "no changed proposal .md files"; exit 0
@@ -272,11 +228,7 @@ jobs:
             done < <(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
           fi
           echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
-          # Non-blocking: parsed typo findings are reported above and in the
-          # summary comment but no longer fail the job. A cspell output line
-          # that is neither a typo finding nor the summary line (config
-          # error, unreadable file, etc.) is a real error and still fails,
-          # even alongside typo findings.
+          # Non-blocking for typos; an output line that is neither a typo nor the summary is a real error and fails.
           extra_error_lines=$(grep -v -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt \
             | grep -v '^CSpell: ' | grep -v '^[[:space:]]*$' || true)
           if [ "$status" -ne 0 ] && [ -n "$extra_error_lines" ]; then
@@ -295,12 +247,7 @@ jobs:
     permissions:
       contents: read
     env:
-      # Upstream aave-proposals-v3 runs its forge tests under [profile.test]
-      # (evm_version = 'prague'); the default profile stays on 'shanghai' for
-      # deploy artifacts. Payload asset contracts on live mainnet now contain
-      # post-shanghai opcodes (e.g. weETH's TLOAD/TSTORE/MCOPY), so any forge
-      # invocation that touches live-fork state must run under the test
-      # profile or it reverts with EvmError: NotActivated.
+      # Upstream runs forge under [profile.test] (prague): live mainnet assets use post-shanghai opcodes (TLOAD/MCOPY) and revert with NotActivated otherwise.
       FOUNDRY_PROFILE: test
     outputs:
       pct: ${{ steps.gate.outputs.pct }}
@@ -319,10 +266,7 @@ jobs:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
         env:
           RPC_MONAD: ${{ secrets.RPC_MONAD }}
-      # No separate `forge build --deny notes` here: upstream aave-proposals-v3
-      # code compiles with warnings we don't own, and `forge coverage` compiles
-      # anyway (a second full compile only doubled the job time).
-      # Foundry version pinned to match upstream aave-proposals-v3 CI; newer Foundry refuses non-Ethereum forks in this setup.
+      # No separate `forge build --deny notes`: upstream code warns and `forge coverage` compiles anyway.
       - name: Coverage threshold (payload contracts only)
         id: gate
         uses: TokenLogic-com-au/github-workflows/.github/actions/coverage-gate@main
@@ -342,10 +286,7 @@ jobs:
       pull-requests: write
       issues: write
     env:
-      # See the matching comment on the coverage job: forge test/coverage
-      # against live-fork mainnet state needs upstream's [profile.test]
-      # (evm_version = 'prague') to handle payload assets whose deployed
-      # bytecode uses post-shanghai opcodes.
+      # [profile.test] (prague) for live-fork bytecode with post-shanghai opcodes.
       FOUNDRY_PROFILE: test
     outputs:
       comment_url: ${{ steps.post.outputs.comment_url }}
@@ -382,10 +323,7 @@ jobs:
         env:
           DIR: ${{ needs.scope.outputs.dir }}
         run: |
-          # The folder itself came from the scope job (one source of truth for
-          # "which proposal folder did this PR change") -- this step only
-          # resolves its .md, which may be unchanged if the PR only touched
-          # the payload .sol.
+          # Folder comes from the scope job; only its .md is resolved here.
           md=$(find "$DIR" -maxdepth 1 -name '*.md' | head -1)
           if [ -z "$md" ]; then
             echo "changed folder $DIR has no .md; skipping advisory step"
@@ -398,22 +336,13 @@ jobs:
         id: diff
         if: steps.folder.outputs.md != ''
         run: |
-          # The report is ALWAYS generated here by the fork test, never taken
-          # from the PR: an author-committed diffs/*.md is not trusted (it
-          # could say anything). Committed reports are set aside outside the
-          # workspace first, so every diffs/*.md present after the run was
-          # written by this CI run, even one byte-identical to a committed
-          # file. The fork test needs --isolate, not just the forge-config
-          # annotation, for ProtocolV3TestBase.defaultTest's payload gas-limit
-          # check to pass; without it the check reverts before diffReports()
-          # ever writes a file.
+          # Report is always generated here, never taken from the PR (an author-committed diffs/*.md is untrusted); committed ones are set aside first. --isolate is needed for the payload gas-limit check to pass.
           mkdir -p diffs
           find diffs -name '*.md' -type f -print0 \
             | tar --null -T - --remove-files -cf "$RUNNER_TEMP/committed-diffs.tar" 2>/dev/null || true
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
           mkdir -p diffs
-          # Exactly one CI-written report is trusted; zero or several leave
-          # `report` empty and every consumer falls back to its no-report path.
+          # Exactly one CI-written report is trusted; otherwise `report` stays empty.
           produced=$(find diffs -name '*.md' -type f | sort)
           report=""
           fork_note=""
@@ -426,11 +355,7 @@ jobs:
             fork_note="fork test wrote several diff reports"
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
-          # No report written -- the fork test itself failed (e.g. a payload
-          # asset's live-mainnet bytecode reverting under the wrong forge
-          # profile). Name the failing test so the advisory comment can say
-          # plainly "the fork test failed" instead of a vague "may not have
-          # completed".
+          # No report: the fork test failed; name the test so the comment can say so.
           if [ -z "$report" ]; then
             fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
             echo "fork_test_status=${fork_note:-${fail_test:-forge test failed with no further detail}}" >> "$GITHUB_OUTPUT"
@@ -463,8 +388,7 @@ jobs:
       - name: Trim forum text to its Motivation/Specification/Next Steps section(s)
         if: steps.gate.outputs.run == '1' && steps.folder.outputs.md != ''
         run: |
-          # Cuts token usage on long funding-update posts that cover many
-          # payloads; falls back to the full post if no matching heading.
+          # Cuts tokens on long funding posts; full post if no matching heading.
           python3 "$GW/forum_trim.py" forum.txt > forum.trimmed.txt
           mv forum.trimmed.txt forum.txt
       - name: Build AI input
@@ -489,10 +413,7 @@ jobs:
           AI_REASONING_EFFORT: "low"
           AI_RESPONSE_FORMAT: "json_object"
         run: |
-          # This is an advisory-only step: an AI-side failure (truncation, API
-          # error, timeout) must never turn the job red -- under a ruleset that
-          # would block a merge on the AI provider's flakiness, not on anything
-          # about the proposal. Log the failure into the comment instead.
+          # Advisory: an AI failure must not turn the job red and block merges; log it into the comment.
           if ! python3 "$GW/ai.py" spec-check input.txt ai-out.md; then
             echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ai-out.md
           fi
@@ -530,8 +451,7 @@ jobs:
           NUMBER: ${{ github.event.pull_request.number }}
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
           FORK_TEST_STATUS: ${{ steps.diff.outputs.fork_test_status }}
-          # Never interpolated into the script text -- read only through the
-          # environment, same as every other untrusted PR-supplied value here.
+          # Env only, never interpolated into the script (untrusted PR value).
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_TEMPLATE_PATH: ${{ steps.pr_template.outputs.path }}
         run: |
@@ -547,13 +467,7 @@ jobs:
           else
             : > pr-template.txt
           fi
-          # Optional 8th arg: the checked-out aave-address-book root (this
-          # job checks out the proposal repo with `submodules: recursive`,
-          # same as the address-book job above) -- a second naming source
-          # for a party the diff report itself never labelled (no event/
-          # storage section of its own, e.g. an approval spender or a plain
-          # constant like DUST_BIN). A missing/renamed path degrades to
-          # today's behaviour rather than failing the step.
+          # 8th arg: address-book root, a second naming source for unlabelled parties; a missing path degrades silently.
           book_root="lib/aave-helpers/lib/aave-address-book"
           [ -d "$book_root" ] || book_root=""
           python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt pr-body.txt pr-template.txt "$book_root"
@@ -597,13 +511,10 @@ jobs:
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           FORK_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          # Never interpolated into the script text -- read only through the
-          # environment, same as every other untrusted PR-supplied value here.
+          # Env only, never interpolated into the script (untrusted PR value).
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          # Repo-level fact (is this repo a fork, and of what), independent of
-          # the proposal folder -- recomputed every run so a later un-forking
-          # or re-pointing is picked up without a stale line lingering.
+          # Recomputed every run so un-forking or re-pointing is picked up.
           repo_json=$(gh api "repos/$REPO" 2>/dev/null || echo '{}')
           is_fork=$(echo "$repo_json" | jq -r '.fork // false')
           parent_repo=$(echo "$repo_json" | jq -r '.parent.full_name // empty')
@@ -614,9 +525,7 @@ jobs:
             if [ -z "$parent_default_branch" ]; then
               echo "::warning::could not resolve the default branch for $parent_repo (gh api repos/$parent_repo failed or returned no default_branch); Upstream PR link will report a lookup failure"
             fi
-            # Selection between multiple candidates (open-preferred, else most
-            # recently updated) is pick_upstream_pr's job, not jq's -- keeps it
-            # testable and out of the workflow.
+            # pick_upstream_pr selects among candidates, not jq.
             candidate_prs_json=$(gh api "repos/$parent_repo/pulls?head=$FORK_OWNER:$HEAD_BRANCH&state=all" 2>/dev/null || echo '[]')
           fi
           fork_repo="${REPO#*/}"
@@ -663,9 +572,7 @@ jobs:
           if [ "$SCOPE_COUNT" = "0" ]; then
             echo "No proposal folder changed in this PR; proposal checks skipped." > summary_body.md
           else
-            # details/uncovered are base64 on the wire (see the
-            # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
-            # writes were observed to fail delimiter matching on this runner.
+            # details/uncovered are base64: multi-line GITHUB_OUTPUT delimiters failed matching on this runner.
             ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
             sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
             cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)

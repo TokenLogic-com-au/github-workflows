@@ -52,7 +52,6 @@ def strip_think(text):
 
 
 def build_request_body(prompt):
-    """Pure function (no I/O) so the request shape is unit-testable."""
     body = {"model": MODEL, "max_tokens": MAX_TOKENS, "messages": [{"role": "user", "content": prompt}]}
     if STYLE == "anthropic":
         body["thinking"] = {"type": "adaptive"}

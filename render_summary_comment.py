@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the proposal-checks summary comment: one line per check with its
-pass/fail/warning icon, and for a failing blocking check, a compact table
-of what actually went wrong with file:line links to the PR head. Never
-fails on its own -- called from a job that must post something even when
-every upstream job errored."""
+"""Builds the proposal-checks summary comment; never fails, so it still posts when upstream jobs errored."""
 import re
 import sys
 from urllib.parse import quote
@@ -89,9 +85,7 @@ def _render_spelling_table(raw_detail: str, repo: str, head_sha: str) -> str:
     return "| File:Line | Word | Suggestion | Context |\n|---|---|---|---|\n" + "\n".join(rows)
 
 
-# A coverage row is repo content: the label keeps only file-name characters
-# (no Markdown or HTML can survive), and count/ranges must be what
-# coverage.awk writes ("12", "63-104,110,+2 more").
+# Coverage rows are repo content: keep only file-name characters and the shapes coverage.awk writes.
 _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 _RANGES_RE = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*(?:,\+\d+ more)?")
 
@@ -115,7 +109,7 @@ def _coverage_body(raw_detail: str, pct: str, minimum: str, tests: str, repo: st
     if tally and tally[1]:
         header += f" ({tally[1]} of {tally[2]} tests skipped)"
     body = [header]
-    # count and ranges never hold "|"; a path may, so split from the right.
+    # a path may hold "|", count and ranges never do: split from the right
     rows = [row.rsplit("|", 2) for row in raw_detail.splitlines() if row.strip()]
     rows = [r for r in rows if len(r) == 3 and r[1].isdigit() and _RANGES_RE.fullmatch(r[2])]
     if rows:
@@ -124,7 +118,6 @@ def _coverage_body(raw_detail: str, pct: str, minimum: str, tests: str, repo: st
         first = ranges.split(",", 1)[0].split("-", 1)[0]
         short = _LABEL_UNSAFE_RE.sub("_", file.rsplit("/", 1)[-1])[:120] or "?"
         if repo and head_sha:
-            # Percent-encode the path so no character can end the link.
             url = f"https://github.com/{repo}/blob/{head_sha}/{quote(file, safe='/')}#L{first}"
             name = f"[{short}]({url})"
         else:
@@ -167,8 +160,6 @@ def render(
         elif name in ("address-book", "spelling"):
             table_fn = _render_address_book_table if name == "address-book" else _render_spelling_table
             if result != "success":
-                # Job errored (e.g. address book missing, cspell config error) --
-                # this is a real failure, not a finding to warn about.
                 lines.append("")
                 table = table_fn(raw_detail, repo, head_sha) if raw_detail else "(no details captured)"
                 lines.append(f"> [!CAUTION]\n> **{name} failed**\n\n" + table)
