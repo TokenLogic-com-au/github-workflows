@@ -133,9 +133,11 @@ jobs:
             case "$book_text_lc" in
               *"$addr_lc"*)
                 const=$(python3 "$GW/address_book.py" book-constant lib/aave-helpers/lib/aave-address-book "$addr" "$file")
-                msg="raw address ${addr} is in the address book; use ${const:-its address book constant}"
-                echo "::notice file=$file,line=$lineno::$msg"
-                details="${details}${file}|${lineno}|notice|${msg}${nl}"
+                if [ -n "$const" ]; then
+                  msg="raw address ${addr} is in the address book; use ${const}"
+                  echo "::notice file=$file,line=$lineno::$msg"
+                  details="${details}${file}|${lineno}|notice|${msg}${nl}"
+                fi
                 ;;
               *)
                 case "$file" in *.t.sol) continue ;; esac

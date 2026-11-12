@@ -88,13 +88,27 @@ class AddressBookStepTest(unittest.TestCase):
 
 
 class BookConstantTest(unittest.TestCase):
-    def test_prefers_the_chain_named_by_the_path(self):
+    def pick(self, entries, path):
         import address_book as ab
 
-        labels = {IN_BOOK: [("ChainlinkBase", "X"), ("ChainlinkArbitrum", "Y")]}
-        self.assertEqual(ab.book_constant(IN_BOOK, labels, "src/A_V3_Arbitrum/Foo.t.sol"), "ChainlinkArbitrum.Y")
-        self.assertEqual(ab.book_constant(IN_BOOK, labels, "src/other/Foo.t.sol"), "ChainlinkArbitrum.Y")
-        self.assertEqual(ab.book_constant(IN_BOOK, labels, "src/A_Base/Foo.t.sol"), "ChainlinkBase.X")
+        return ab.book_constant(IN_BOOK, {IN_BOOK: entries}, path)
+
+    def test_assets_underlying_prefers_the_prefix_family_and_chain(self):
+        entries = [("AaveV2EthereumAMMAssets", "USDC_UNDERLYING"), ("AaveV3EthereumAssets", "USDC_UNDERLYING")]
+        self.assertEqual(
+            self.pick(entries, "src/20260101_Aave_V3_Ethereum_Foo/AaveV3Ethereum_Foo_20260101.t.sol"),
+            "AaveV3EthereumAssets.USDC_UNDERLYING",
+        )
+
+    def test_v2_and_v3_same_chain_follow_the_prefix_version(self):
+        entries = [("AaveV2EthereumAssets", "X"), ("AaveV3EthereumAssets", "X")]
+        self.assertEqual(self.pick(entries, "src/d/AaveV3Ethereum_Foo_20260101.t.sol"), "AaveV3EthereumAssets.X")
+        self.assertEqual(self.pick(entries, "src/d/AaveV2Ethereum_Foo_20260101.t.sol"), "AaveV2EthereumAssets.X")
+
+    def test_multi_file_uses_the_chain_in_the_folder(self):
+        entries = [("ChainlinkBase", "X"), ("ChainlinkArbitrum", "Y")]
+        self.assertEqual(self.pick(entries, "src/20260101_Aave_V3_Arbitrum_Foo/Multi_Foo_20260101.t.sol"), "ChainlinkArbitrum.Y")
+        self.assertEqual(self.pick(entries, "src/20260101_Multi_Foo/Multi_Foo_20260101.t.sol"), "ChainlinkArbitrum.Y")
 
 
 if __name__ == "__main__":
