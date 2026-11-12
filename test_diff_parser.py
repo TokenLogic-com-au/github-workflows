@@ -410,6 +410,18 @@ class ApprovalRecipientTests(unittest.TestCase):
         amounts = {a["amount"] for a in out}
         self.assertEqual(amounts, {"0", "1,000"})
 
+    def test_zero_approval_is_not_superseded_across_payload_reports(self):
+        tok = "#### 0x7Fc66500c84A76Ad7e9c93437bFc5ac33E2DDaE9 (AaveV3Ethereum.ASSETS.AAVE.UNDERLYING)\n"
+        owner = "owner: 0x25F2226B597E8F9514B3F68F00f494cF4f286491, spender: 0x4da27a545c0c5B758a6BA100e3a049001de870f5"
+        revoke = f"| 0 | Approval({owner}, value: 0 [0, 18 decimals]) |\n"
+        grant = f"| 0 | Approval({owner}, value: 5 [5000000000000000000, 18 decimals]) |\n"
+        text = (
+            "# Payload report: A\n\n## Event logs\n\n" + tok + revoke
+            + "\n# Payload report: B\n\n## Event logs\n\n" + tok + grant
+        )
+        amounts = [a["amount"] for a in dp.parse_payload_actions(text)]
+        self.assertEqual(amounts, ["0", "5"])
+
 
 if __name__ == "__main__":
     unittest.main()
