@@ -287,11 +287,11 @@ _SOL_CONST_RE = re.compile(
     re.DOTALL,
 )
 # Library names are `<family><Chain>[<suffix>]`, e.g. AaveV3EthereumAssets.
-_LIBRARY_FAMILY_RE = re.compile(r"^(AaveV[234]|GovernanceV3|Umbrella|Gho|Misc)([A-Z][A-Za-z0-9]*)$")
+_LIBRARY_FAMILY_RE = re.compile(r"^(AaveV[234]|GovernanceV3|Umbrella|Gho|Misc|Chainlink)([A-Z][A-Za-z0-9]*)$")
 _LIBRARY_SUFFIXES = ("Assets", "EModes", "ExternalLibraries")
 # Instance chains (EthereumLido) share Misc/GovernanceV3/Umbrella/Gho libraries with their base chain.
 _INSTANCE_SUFFIXES = ("Lido", "EtherFi", "Horizon")
-_CHAIN_ONLY_FAMILIES = ("Misc", "GovernanceV3", "Umbrella", "Gho")
+_CHAIN_ONLY_FAMILIES = ("Misc", "GovernanceV3", "Umbrella", "Gho", "Chainlink")
 # Used by infer_chain on label text.
 _CHAIN_SUFFIX_RE = re.compile(r"\b(?:AaveV[234]|GovernanceV3|Umbrella|Gho|Misc)([A-Z][A-Za-z0-9]*)\b")
 
@@ -425,10 +425,36 @@ def describe_address(addr, label_map, symbol_map, solidity_labels=None, chain=No
     return addr
 
 
+def book_constant(addr, solidity_labels, path_hint):
+    """`Library.CONSTANT` naming `addr`: the file prefix's own family+chain first, then the longest chain the path names, else sorted-first."""
+    entries = sorted(solidity_labels.get(addr.lower(), ()))
+    if not entries:
+        return None
+    hint = path_hint.lower().replace("_", "")
+    prefix_family, prefix_chain = _library_chain(path_hint.rsplit("/", 1)[-1].split("_")[0])
+
+    def score(entry):
+        family, chain = _library_chain(entry[0])
+        if chain is None:
+            return (False, 0)
+        return (
+            (family, chain) == (prefix_family, prefix_chain),
+            len(chain) if chain.lower() in hint else 0,
+        )
+
+    library_name, const_name = max(entries, key=score)
+    return f"{library_name}.{const_name}"
+
+
 def main(argv):
-    """`pending-listing REPORT ADDRESS`: prints the note or nothing; a miss exits 0."""
+    """`pending-listing REPORT ADDRESS` / `book-constant BOOK_ROOT ADDRESS PATH`: print the note or name, or nothing; a miss exits 0."""
+    if len(argv) == 5 and argv[1] == "book-constant":
+        name = book_constant(argv[3], load_solidity_labels(argv[2]), argv[4])
+        if name:
+            print(name)
+        return 0
     if len(argv) != 4 or argv[1] != "pending-listing":
-        sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS\n")
+        sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS | book-constant BOOK_ROOT ADDRESS PATH\n")
         return 2
     try:
         with open(argv[2], encoding="utf-8", errors="replace") as f:

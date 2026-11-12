@@ -171,7 +171,7 @@ def render(
                     lines.append(f"> [!WARNING]\n> **{name}: warnings**\n\n" + table_fn(warnings, repo, head_sha))
                 if notices:
                     lines.append("")
-                    lines.append(f"> [!NOTE]\n> **{name}: generated after listing**\n\n" + table_fn(notices, repo, head_sha))
+                    lines.append(f"> [!NOTE]\n> **{name}: notices**\n\n" + table_fn(notices, repo, head_sha))
             elif raw_detail:
                 lines.append("")
                 lines.append(f"> [!WARNING]\n> **{name}: warnings**\n\n" + table_fn(raw_detail, repo, head_sha))
