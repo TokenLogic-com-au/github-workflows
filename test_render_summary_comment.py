@@ -52,7 +52,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("[!WARNING]", out)
         self.assertNotIn("address-book: warnings", out)
         self.assertIn("[!NOTE]", out)
-        self.assertIn("address-book: generated after listing", out)
+        self.assertIn("address-book: notices", out)
         self.assertIn("USDG underlying, not in the address book yet", out)
         self.assertIn("Foo.sol:12", out)
 
@@ -67,7 +67,7 @@ class RenderTests(unittest.TestCase):
         out = rsc.render(results, details, "100", "100", "", False, REPO, SHA)
         self.assertIn("\u26a0\ufe0f **address-book**", out)
         warn_at = out.index("address-book: warnings")
-        note_at = out.index("address-book: generated after listing")
+        note_at = out.index("address-book: notices")
         self.assertLess(out.index("Bar.sol:34"), note_at)
         self.assertGreater(out.index("Bar.sol:34"), warn_at)
         self.assertGreater(out.index("Foo.sol:12"), note_at)

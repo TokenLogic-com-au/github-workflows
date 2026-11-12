@@ -101,7 +101,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # src/**/*.sol minus *.t.sol; addresses only on a `//` comment line are ignored.
+          # src/**/*.sol incl. *.t.sol; addresses only on a `//` comment line are ignored.
+          # In-book address: notice naming its constant, everywhere. Not in the book: warning, never in *.t.sol (tests use whales/mocks).
           # One nested address-book copy under aave-helpers, as upstream; a second copy clashed in forge remappings.
           # Always exits 0: a non-zero exit here lost GITHUB_OUTPUT writes on this runner (SIGPIPE from grep -q under pipefail).
           book=$(find lib/aave-helpers/lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
@@ -130,8 +131,14 @@ jobs:
             addr="${rest#*:}"
             addr_lc=$(printf '%s' "$addr" | tr 'A-F' 'a-f')
             case "$book_text_lc" in
-              *"$addr_lc"*) ;;
+              *"$addr_lc"*)
+                const=$(python3 "$GW/address_book.py" book-constant lib/aave-helpers/lib/aave-address-book "$addr" "$file")
+                msg="raw address ${addr} is in the address book; use ${const:-its address book constant}"
+                echo "::notice file=$file,line=$lineno::$msg"
+                details="${details}${file}|${lineno}|notice|${msg}${nl}"
+                ;;
               *)
+                case "$file" in *.t.sol) continue ;; esac
                 pending=""
                 [ -n "$report" ] && pending=$(python3 "$GW/address_book.py" pending-listing "$report" "$addr")
                 if [ -n "$pending" ]; then
@@ -145,7 +152,7 @@ jobs:
                 ;;
             esac
           done < <(
-            git diff -U0 "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.sol' ':!src/**/*.t.sol' \
+            git diff -U0 "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.sol' \
               | awk '
                   /^\+\+\+ b\// { file=substr($0,7); next }
                   /^@@/ { split($0,a,"+"); split(a[2],b,","); line=b[1]+0; next }

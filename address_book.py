@@ -425,10 +425,30 @@ def describe_address(addr, label_map, symbol_map, solidity_labels=None, chain=No
     return addr
 
 
+def book_constant(addr, solidity_labels, path_hint):
+    """`Library.CONSTANT` naming `addr`, preferring the library whose longest CamelCase suffix (the chain) the path names; sorted-first otherwise."""
+    entries = sorted(solidity_labels.get(addr.lower(), ()))
+    if not entries:
+        return None
+    hint = path_hint.lower().replace("_", "")
+
+    def score(entry):
+        name = entry[0]
+        return max((len(name) - i for i in range(1, len(name)) if name[i].isupper() and name[i:].lower() in hint), default=0)
+
+    library_name, const_name = max(entries, key=score)
+    return f"{library_name}.{const_name}"
+
+
 def main(argv):
-    """`pending-listing REPORT ADDRESS`: prints the note or nothing; a miss exits 0."""
+    """`pending-listing REPORT ADDRESS` / `book-constant BOOK_ROOT ADDRESS PATH`: print the note or name, or nothing; a miss exits 0."""
+    if len(argv) == 5 and argv[1] == "book-constant":
+        name = book_constant(argv[3], load_solidity_labels(argv[2]), argv[4])
+        if name:
+            print(name)
+        return 0
     if len(argv) != 4 or argv[1] != "pending-listing":
-        sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS\n")
+        sys.stderr.write("usage: address_book.py pending-listing REPORT ADDRESS | book-constant BOOK_ROOT ADDRESS PATH\n")
         return 2
     try:
         with open(argv[2], encoding="utf-8", errors="replace") as f:
