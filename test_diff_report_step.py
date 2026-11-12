@@ -22,7 +22,7 @@ def diff_step_script():
     raise AssertionError("diff step not found")
 
 
-def run_step(committed, produced):
+def run_step(committed, produced, log=""):
     """Runs the real workflow step with a fake forge that writes `produced`
     (name -> text) into diffs/; returns (outputs dict, report text or None)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -38,6 +38,8 @@ def run_step(committed, produced):
         body = "#!/bin/sh\nmkdir -p diffs\n"
         for name, text in produced.items():
             body += f"printf '%s' '{text}' > diffs/{name}\n"
+        if log:
+            body += f"printf '%s\\n' '{log}'\n"
         with open(forge_script, "w") as f:
             f.write(body)
         forge = os.path.join(bindir, "forge")
@@ -76,6 +78,19 @@ class DiffReportStepTest(unittest.TestCase):
         self.assertIn("alpha-body", text)
         self.assertIn("# Payload report: PayloadB", text)
         self.assertIn("beta-body", text)
+
+    def test_reports_are_joined_in_name_order(self):
+        outputs, text = run_step({}, {"PayloadB.md": "beta-body", "PayloadA.md": "alpha-body"})
+        self.assertLess(text.index("# Payload report: PayloadA"), text.index("# Payload report: PayloadB"))
+        self.assertLess(text.index("alpha-body"), text.index("beta-body"))
+
+    def test_partial_run_keeps_the_failing_test_status_alongside_reports(self):
+        outputs, text = run_step(
+            {}, {"PayloadA.md": "alpha-body", "PayloadB.md": "beta-body"},
+            log="[FAIL: revert] test_PayloadC_execution() (gas: 1)",
+        )
+        self.assertIn("alpha-body", text)
+        self.assertEqual(outputs["fork_test_status"], "test_PayloadC_execution")
 
     def test_single_ci_report_is_kept(self):
         outputs, text = run_step({}, {"Only.md": "solo-body"})

@@ -428,17 +428,16 @@ jobs:
             echo "ci_report=$report" >> "$GITHUB_OUTPUT"
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
-          # No report written -- the fork test itself failed (e.g. a payload
-          # asset's live-mainnet bytecode reverting under the wrong forge
-          # profile). Name the failing test so the advisory comment can say
-          # plainly "the fork test failed" instead of a vague "may not have
-          # completed".
-          if [ -z "$report" ]; then
-            fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
-            echo "fork_test_status=${fork_note:-${fail_test:-forge test failed with no further detail}}" >> "$GITHUB_OUTPUT"
-          else
-            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
+          # Derived from the log whether or not reports exist: a multi-payload
+          # proposal can write some reports while another payload's test
+          # fails. Name the failing test so the advisory comment can say
+          # plainly "the fork test failed". No report and no [FAIL line still
+          # means the forge run itself failed.
+          fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
+          if [ -z "$fail_test" ] && [ -z "$report" ]; then
+            fail_test="forge test failed with no further detail"
           fi
+          echo "fork_test_status=$fail_test" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
         if: steps.diff.outputs.ci_report != ''
         with:
