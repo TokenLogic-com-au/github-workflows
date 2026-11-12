@@ -91,6 +91,8 @@ def _is_superseded_zero_approval(
         return False
     section = sections[idx]
     for later_idx in range(idx + 1, len(lines)):
+        if lines[later_idx].startswith("# "):
+            return False  # next payload report of a combined report
         if sections[later_idx] != section:
             continue
         later_line = lines[later_idx]

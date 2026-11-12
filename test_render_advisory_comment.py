@@ -39,6 +39,13 @@ class BuildTests(unittest.TestCase):
         self.assertIn("test_defaultProposalExecution", out)
         self.assertNotIn("may not have completed", out)
 
+    def test_fork_test_failure_is_shown_even_when_a_report_exists(self):
+        out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags", "test_PayloadC_execution")
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("the fork test failed for at least one payload", out)
+        self.assertIn("test_PayloadC_execution", out)
+        self.assertIn("No mismatches found", out)
+
     def test_clean_match_shows_note_no_mismatches(self):
         out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags")
         self.assertIn("[!NOTE]", out)

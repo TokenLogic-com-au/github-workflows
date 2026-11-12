@@ -203,12 +203,12 @@ def build(
         return "\n".join(parts)
 
     payload_items = diff_parser.parse_payload_actions(diff_report_text)
+    fork_test_status = sanitize_markdown(fork_test_status.strip(), 300)
     if not payload_items:
-        fork_test_status = fork_test_status.strip()
         if fork_test_status:
             parts.append(
                 f"> [!WARNING]\n> the fork test failed, so the diff report could not be generated: "
-                f"{sanitize_markdown(fork_test_status, 300)}"
+                f"{fork_test_status}"
             )
         else:
             parts.append(
@@ -218,6 +218,12 @@ def build(
         parts.append("")
         parts.append(render_scale_alert(scale_out_text))
         return "\n".join(parts)
+    if fork_test_status:
+        parts.append(
+            f"> [!WARNING]\n> the fork test failed for at least one payload, so the diff report "
+            f"may be incomplete: {fork_test_status}"
+        )
+        parts.append("")
 
     label_map, symbol_map = address_book.build_maps(diff_report_text)
     new_reserves = address_book.new_reserves(diff_report_text)

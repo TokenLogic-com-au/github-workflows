@@ -343,26 +343,25 @@ jobs:
             | tar --null -T - --remove-files -cf "$RUNNER_TEMP/committed-diffs.tar" 2>/dev/null || true
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv 2>&1 | tee forge-test.log || true
           mkdir -p diffs
-          # Exactly one CI-written report is trusted; otherwise `report` stays empty.
+          # Every CI-written report is joined, in name order, under a per-payload heading; zero reports leaves `report` empty.
           produced=$(find diffs -name '*.md' -type f | sort)
           report=""
-          fork_note=""
-          if [ -n "$produced" ] && [ "$(printf '%s\n' "$produced" | wc -l)" -eq 1 ]; then
-            report="$produced"
+          if [ -n "$produced" ]; then
             mkdir -p "$RUNNER_TEMP/ci-diff-report"
-            cp "$report" "$RUNNER_TEMP/ci-diff-report/report.md"
-            echo "ci_report=$RUNNER_TEMP/ci-diff-report/report.md" >> "$GITHUB_OUTPUT"
-          elif [ -n "$produced" ]; then
-            fork_note="fork test wrote several diff reports"
+            report="$RUNNER_TEMP/ci-diff-report/report.md"
+            : > "$report"
+            while IFS= read -r f; do
+              { printf '# Payload report: %s\n\n' "$(basename "$f" .md)"; cat "$f"; printf '\n'; } >> "$report"
+            done <<< "$produced"
+            echo "ci_report=$report" >> "$GITHUB_OUTPUT"
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
-          # No report: the fork test failed; name the test so the comment can say so.
-          if [ -z "$report" ]; then
-            fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
-            echo "fork_test_status=${fork_note:-${fail_test:-forge test failed with no further detail}}" >> "$GITHUB_OUTPUT"
-          else
-            echo "fork_test_status=" >> "$GITHUB_OUTPUT"
+          # Read from the log even when reports exist: one payload's test can fail while others write reports.
+          fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
+          if [ -z "$fail_test" ] && [ -z "$report" ]; then
+            fail_test="forge test failed with no further detail"
           fi
+          echo "fork_test_status=$fail_test" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
         if: steps.diff.outputs.ci_report != ''
         with:
