@@ -16,6 +16,7 @@ defaults:
   run:
     shell: bash
 env:
+  # Same Foundry as upstream aave-proposals-v3's generated-payloads build job (test.yml): a fixed release, because callers are not proposal repos and need no Monad hardfork.
   FOUNDRY_VERSION: v1.7.1
 jobs:
   test:

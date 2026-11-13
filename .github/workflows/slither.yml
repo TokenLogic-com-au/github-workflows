@@ -16,6 +16,7 @@ defaults:
   run:
     shell: bash
 env:
+  # Same Foundry as upstream aave-proposals-v3's generated-payloads build job (test.yml): this job only builds for static analysis.
   FOUNDRY_VERSION: v1.7.1
 jobs:
   analyze:
