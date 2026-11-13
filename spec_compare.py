@@ -4,7 +4,8 @@ Outputs: warnings (matched item, amount/recipient/decimals disagree), unexplaine
 with no forum counterpart), forum_only (neutral, expected when a post spans many payloads),
 notes (forum amount is a formula, so it is never compared to the decoded amount), amount_matches
 (forum item with no recipient address, matched on kind, asset and amount only: the recipient
-is not proven, so the comment lists each pair for a human check).
+is not proven, so the comment lists each pair for a human check), folded_address_matches (a folded
+movement matched on its final recipient only: its hops and approvals are listed for a human check).
 """
 import re
 
@@ -56,17 +57,17 @@ def _leading_number(text):
     return value
 
 
-def _is_approval(forum_action):
-    return (forum_action or "").casefold().startswith("approv")
+FORUM_KIND_BY_APPROVAL = {True: "allowance", False: "movement"}
 
 
 def _amount_match(forum_items, matched_forum_idxs, p):
     """Index of an unmatched address-less forum item of the payload's kind, asset and amount; same network first.
 
-    Kind: an allowance moves no tokens, so a forum approval explains only an Approval and a forum movement never does.
+    Kind: an allowance moves no tokens, so a forum `kind` "allowance" explains only an Approval and "movement" only the
+    rest; a forum item without a known kind never matches on amount.
     """
     asset = (p.get("asset") or "").casefold()
-    p_is_approval = p.get("event_name") == "Approval"
+    p_kind = FORUM_KIND_BY_APPROVAL[p.get("event_name") == "Approval"]
     p_num = _leading_number(p.get("amount"))
     if not asset or p_num is None:
         return None
@@ -75,7 +76,7 @@ def _amount_match(forum_items, matched_forum_idxs, p):
         for i, f in enumerate(forum_items)
         if i not in matched_forum_idxs
         and not _extract_address(f.get("recipient"))
-        and _is_approval(f.get("action")) == p_is_approval
+        and f.get("kind") == p_kind
         and (f.get("asset") or "").casefold() == asset
         and not _is_formula(f.get("amount"))
         and _leading_number(f.get("amount")) == p_num
@@ -90,6 +91,7 @@ def compare(forum_items, payload_items):
     unexplained = []
     notes = []
     amount_matches = []
+    folded_address_matches = []
     matched_forum_idxs = set()
 
     for p in payload_items:
@@ -114,6 +116,8 @@ def compare(forum_items, payload_items):
 
         matched_forum_idxs.add(match_idx)
         f = forum_items[match_idx]
+        if p.get("members"):
+            folded_address_matches.append({"forum": f, "payload": p})
         label = f"{f.get('action', 'Action')} {f.get('asset', '')}".strip()
         f_amount = f.get("amount")
         if f_amount and _is_formula(f_amount):
@@ -135,6 +139,7 @@ def compare(forum_items, payload_items):
         "unexplained": unexplained,
         "notes": notes,
         "amount_matches": amount_matches,
+        "folded_address_matches": folded_address_matches,
         "forum_only": forum_only,
         "forum_only_count": len(forum_only),
     }

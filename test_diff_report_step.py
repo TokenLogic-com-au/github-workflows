@@ -169,6 +169,21 @@ Suite result: FAILED. 1 passed; 1 failed; 0 skipped; finished in 1s (1s CPU time
         outputs, _ = run_step({}, {"PayloadA.md": "alpha-body"}, log=log)
         self.assertEqual(outputs["fork_test_status"], "PayloadF_Test.test_swap (EvmError: Revert)")
 
+    def test_unparsed_fail_lines_add_no_separator_and_still_warn(self):
+        log = """Failing tests:
+Encountered 2 failing tests in src/p/PayloadA.t.sol:A_Test
+[FAIL: odd output without a test name]
+[FAIL: x] test_y() (gas: 1)
+
+Encountered 1 failing test in src/p/PayloadB.t.sol:B_Test
+[FAIL: odd output without a test name]
+"""
+        outputs, _ = run_step({}, {"PayloadA.md": "alpha-body"}, log=log)
+        self.assertEqual(outputs["fork_test_status"], "A_Test.test_y (x)")
+        outputs, _ = run_step({}, {"PayloadA.md": "alpha-body"},
+                              log="Failing tests:\nEncountered 1 failing test in src/p/B.t.sol:B_Test\n[FAIL: odd]\n")
+        self.assertEqual(outputs["fork_test_status"], "forge test failed with no further detail")
+
 
 if __name__ == "__main__":
     unittest.main()

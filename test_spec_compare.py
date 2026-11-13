@@ -197,7 +197,7 @@ class AmountMatchTests(unittest.TestCase):
     GHO_65M = {"amount": "65,000,000", "asset": "GHO", "recipient": "0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642"}
 
     def _forum(self, recipient, network, asset="GHO", amount="65M"):
-        return {"action": "Transfer", "asset": asset, "amount": amount, "recipient": recipient, "network": network}
+        return {"action": "Transfer", "kind": "movement", "asset": asset, "amount": amount, "recipient": recipient, "network": network}
 
     def test_named_recipient_matches_on_asset_and_amount_and_is_reported_as_unproven(self):
         forum = [self._forum("GHO Reserve", "Avalanche")]
@@ -235,12 +235,21 @@ class AmountMatchTests(unittest.TestCase):
         out = sc.compare([self._forum("GHO Reserve", "Avalanche")], [approval])
         self.assertEqual(out["unexplained"], [approval])
         self.assertEqual(out["amount_matches"], [])
-        forum_approve = dict(self._forum("GHO Reserve", "Avalanche"), action="Approve")
+        forum_approve = dict(self._forum("GHO Reserve", "Avalanche"), action="Approve", kind="allowance")
         transfer = dict(self.GHO_65M, chain="Avalanche", event_name="Transfer")
         out = sc.compare([forum_approve], [transfer])
         self.assertEqual(out["unexplained"], [transfer])
         out = sc.compare([forum_approve], [approval])
         self.assertEqual(len(out["amount_matches"]), 1)
+
+    def test_the_forum_kind_field_decides_allowance_or_movement(self):
+        approval = dict(self.GHO_65M, chain="Avalanche", event_name="Approval")
+        transfer = dict(self.GHO_65M, chain="Avalanche", event_name="Transfer")
+        refresh = dict(self._forum("GHO Reserve", "Avalanche"), action="Refresh Allowance", kind="allowance")
+        self.assertEqual(len(sc.compare([refresh], [approval])["amount_matches"]), 1)
+        self.assertEqual(sc.compare([refresh], [transfer])["unexplained"], [transfer])
+        no_kind = {k: v for k, v in self._forum("GHO Reserve", "Avalanche").items() if k != "kind"}
+        self.assertEqual(sc.compare([no_kind], [transfer])["unexplained"], [transfer])
 
 
 if __name__ == "__main__":

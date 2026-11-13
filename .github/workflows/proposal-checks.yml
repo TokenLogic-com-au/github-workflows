@@ -381,10 +381,12 @@ jobs:
             /^$/ { contract = "" }
             contract != "" && /^\[FAIL/ {
               f = failure($0)
+              if (f == "") next
               if (summary_seen) { summary = summary ssep f; ssep = "; " } else { suite = suite usep f; usep = "; " }
             }
             END { print (summary != "" ? summary : suite) }' forge-test.log)
-          if [ -z "$fail_test" ] && [ -z "$report" ]; then
+          # No report, or a FAIL line no test name could be read from: still warn.
+          if [ -z "$fail_test" ] && { [ -z "$report" ] || grep -q '^\[FAIL' forge-test.log; }; then
             fail_test="forge test failed with no further detail"
           fi
           echo "fork_test_status=$fail_test" >> "$GITHUB_OUTPUT"

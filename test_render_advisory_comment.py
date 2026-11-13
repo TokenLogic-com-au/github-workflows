@@ -4,6 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import readable_actions
 import render_advisory_comment as rac
 
 CLEAN_FORUM = json.dumps({"forum": [
@@ -578,8 +579,8 @@ class AmountMatchRenderTests(unittest.TestCase):
                "inline_symbol": "GHO", "section": "0xtoken"}
 
     def _notes(self, recipient):
-        forum = {"action": "Transfer", "asset": "GHO", "amount": "65,000,000", "recipient": recipient, "network": "Avalanche"}
-        return rac.describe_amount_matches([{"forum": forum, "payload": self.PAYLOAD}], {}, {}, None)
+        forum = {"action": "Transfer", "kind": "movement", "asset": "GHO", "amount": "65,000,000", "recipient": recipient, "network": "Avalanche"}
+        return rac.describe_matches([{"forum": forum, "payload": self.PAYLOAD}], {}, {}, None)
 
     def test_an_amount_match_is_not_reported_as_no_mismatch(self):
         comparison = {"warnings": [], "notes": [], "forum_only_count": 0}
@@ -592,6 +593,36 @@ class AmountMatchRenderTests(unittest.TestCase):
         out = rac.render_comparison_alerts(comparison, [], 0, (), self._notes("the reserve " * 100))
         self.assertIn("> Payload: Transfer: 65,000,000 `GHO` from 0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0 "
                       "to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642", out.splitlines())
+
+class FoldedAddressMatchTests(unittest.TestCase):
+    EX = "0x1000000000000000000000000000000000000001"
+    ATT = "0x2000000000000000000000000000000000000002"
+    GOOD = "0x3000000000000000000000000000000000000003"
+
+    def _ev(self, event, sender, to):
+        return {"event_name": event, "counterparty": sender, "recipient": to, "raw_amount": "65", "amount": "65",
+                "payload": 0, "section": "0xtoken", "inline_symbol": "GHO"}
+
+    def _render(self, items):
+        units = readable_actions.fold_flows(items, {})
+        forum = [{"action": "Transfer", "kind": "movement", "asset": "GHO", "amount": "65", "recipient": self.GOOD,
+                  "network": "Ethereum"}]
+        cmp = rac.compare_around_seeds(forum, [], units)
+        notes = rac.describe_matches(cmp["folded_address_matches"], {}, {}, None)
+        return rac.render_comparison_alerts(cmp, [], 0, (), (), notes).splitlines()
+
+    def test_hops_through_other_addresses_stay_visible_on_an_address_match(self):
+        lines = self._render([self._ev("Approval", self.EX, self.ATT), self._ev("Transfer", self.EX, self.ATT),
+                              self._ev("Transfer", self.ATT, self.GOOD)])
+        self.assertNotIn("> No mismatches found between the payload and the forum post.", lines)
+        self.assertIn("> Matched on the final recipient only; check each hop and allowance:", lines)
+        self.assertIn(f">   - Approval: {self.EX} approves {self.ATT} to spend 65 `GHO`", lines)
+        self.assertIn(f">   - Transfer: 65 `GHO` from {self.EX} to {self.ATT}", lines)
+
+    def test_a_hop_without_an_approval_stays_visible_too(self):
+        lines = self._render([self._ev("Transfer", self.EX, self.ATT), self._ev("Transfer", self.ATT, self.GOOD)])
+        self.assertNotIn("> No mismatches found between the payload and the forum post.", lines)
+        self.assertIn(f">   - Transfer: 65 `GHO` from {self.EX} to {self.ATT}", lines)
 
 
 if __name__ == "__main__":
