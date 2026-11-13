@@ -42,6 +42,7 @@ Scroll
 Soneium
 Sonic
 TokenLogic
+USAT
 USDC
 USDS
 USDT
@@ -114,6 +115,7 @@ multisig
 onboarding
 overcollateralized
 paraswap
+pashov
 permissioned
 permissionless
 pricefeed
