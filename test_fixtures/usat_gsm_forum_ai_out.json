@@ -1,0 +1,1 @@
+{"forum":[{"action":"Mint","asset":"GHO","amount":"65,000,000","recipient":null,"network":"Ethereum"},{"action":"Bridge","asset":"GHO","amount":"65,000,000","recipient":"Avalanche Collector","network":"Ethereum to Avalanche"},{"action":"Transfer","asset":"GHO","amount":"65,000,000","recipient":"GHO Reserve","network":"Avalanche"}]}

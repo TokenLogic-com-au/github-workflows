@@ -80,7 +80,7 @@ def _forum_seed_line(forum_item) -> str:
     return f"Forum: {' '.join(described)} to {forum_item.get('recipient') or 'unknown recipient'}"
 
 
-def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain):
+def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels):
     """Proves listing seeds over all payload items before the forum compare, so the forum cannot choose the seed.
 
     Proven: beneficiary is DUST_BIN and pool is POOL in the address book; taken only when a reserve has exactly one.
@@ -88,13 +88,15 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
     proven = [
         group
         for group in readable_actions.find_seed_groups(
-            payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
+            payload_items, label_map, symbol_map, new_reserves, solidity_labels
         )
         if group["kind"] == readable_actions.LISTING_SEED_KIND
         and address_book.names_book_constant(
-            group["beneficiary"], solidity_labels, chain, address_book.DUST_BIN_CONSTANT
+            group["beneficiary"], solidity_labels, group["chain"], address_book.DUST_BIN_CONSTANT
         )
-        and address_book.names_book_constant(group["pool"], solidity_labels, chain, address_book.POOL_CONSTANT)
+        and address_book.names_book_constant(
+            group["pool"], solidity_labels, group["chain"], address_book.POOL_CONSTANT
+        )
     ]
     per_reserve = Counter(group["reserve"] for group in proven)
     taken = [group for group in proven if per_reserve[group["reserve"]] == 1]
@@ -111,6 +113,7 @@ def compare_around_seeds(forum_items, seed_groups, remaining_items):
         **comparison,
         "warnings": seed_cmp["warnings"] + comparison["warnings"],
         "notes": seed_cmp["notes"] + comparison["notes"],
+        "amount_matches": seed_cmp["amount_matches"] + comparison["amount_matches"],
     }
 
 
@@ -134,8 +137,39 @@ def _render_seed_notes(seed_notes) -> str:
     return "> [!NOTE]\n" + "\n".join(lines)
 
 
+def describe_amount_matches(amount_matches, label_map, symbol_map, solidity_labels):
+    """One note per forum item matched on asset and amount only, with the payload movement and its folded hops."""
+    notes = []
+    for pair in amount_matches:
+        f, p = pair["forum"], pair["payload"]
+        described = " ".join(str(f.get(key) or "") for key in ("action", "amount", "asset")).split()
+        forum_text = (
+            f"{' '.join(described)} to {f.get('recipient') or 'no recipient'} ({f.get('network') or 'no network'})"
+        )
+        notes.append(
+            {
+                "line": f"Forum: {forum_text}; payload: "
+                + readable_actions.describe_action(p, label_map, symbol_map, solidity_labels),
+                "sub_lines": readable_actions.flow_sub_lines(p, label_map, symbol_map, solidity_labels),
+            }
+        )
+    return notes
+
+
+def _render_amount_match_notes(amount_match_notes) -> str:
+    lines = ["> [!NOTE]", "> Matched on asset and amount only (the forum names the recipient in words); check each recipient:"]
+    for note in amount_match_notes:
+        raw_lines = [f"> {note['line']}"] + [f">   - {sub}" for sub in note["sub_lines"]]
+        lines += [_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP) for raw in raw_lines]
+    return "\n".join(lines)
+
+
 def render_comparison_alerts(
-    comparison: dict, readable_findings: list, omitted_index_updates: int = 0, seed_notes: list = ()
+    comparison: dict,
+    readable_findings: list,
+    omitted_index_updates: int = 0,
+    seed_notes: list = (),
+    amount_match_notes: list = (),
 ) -> str:
     """`readable_findings` is required so a forgotten build fails loudly instead of printing "No mismatches found"."""
     blocks = []
@@ -157,6 +191,8 @@ def render_comparison_alerts(
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
     if not readable_findings and not comparison["warnings"]:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
+    if amount_match_notes:
+        blocks.append(_render_amount_match_notes(amount_match_notes))
     if seed_notes:
         blocks.append(_render_seed_notes(seed_notes))
     if comparison.get("notes"):
@@ -203,7 +239,7 @@ def build(
         return "\n".join(parts)
 
     payload_items = diff_parser.parse_payload_actions(diff_report_text)
-    fork_test_status = sanitize_markdown(fork_test_status.strip(), 300)
+    fork_test_status = _truncate_at_word_boundary(sanitize_markdown(fork_test_status.strip()), FINDING_LINE_CAP)
     if not payload_items:
         if fork_test_status:
             parts.append(
@@ -228,19 +264,31 @@ def build(
     label_map, symbol_map = address_book.build_maps(diff_report_text)
     new_reserves = address_book.new_reserves(diff_report_text)
     solidity_labels = address_book.load_solidity_labels(address_book_root)
-    chain = address_book.infer_chain(diff_report_text)
     seed_groups, remaining_items = take_proven_listing_seeds(
-        payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
+        payload_items, label_map, symbol_map, new_reserves, solidity_labels
     )
-    comparison = compare_around_seeds(forum_items, seed_groups, remaining_items)
+    supply_flow_ids = {
+        id(member)
+        for group in readable_actions.find_seed_groups(
+            remaining_items, label_map, symbol_map, new_reserves, solidity_labels
+        )
+        for member in group["members"]
+    }
+    units = readable_actions.fold_flows(remaining_items, symbol_map, supply_flow_ids)
+    comparison = compare_around_seeds(forum_items, seed_groups, units)
     readable_findings = readable_actions.build_readable_findings(
-        comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels, chain
+        comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels
+    )
+    amount_match_notes = describe_amount_matches(
+        comparison["amount_matches"], label_map, symbol_map, solidity_labels
     )
     seed_notes, forum_only = pair_seed_notes(seed_groups, comparison["forum_only"])
     comparison = {**comparison, "forum_only": forum_only, "forum_only_count": len(forum_only)}
     # raw report, not deduped items: an index can update more than once
     omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
-    parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates, seed_notes))
+    parts.append(
+        render_comparison_alerts(comparison, readable_findings, omitted_index_updates, seed_notes, amount_match_notes)
+    )
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
     return "\n".join(parts)

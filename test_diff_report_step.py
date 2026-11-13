@@ -39,7 +39,10 @@ def run_step(committed, produced, log=""):
         for name, text in produced.items():
             body += f"printf '%s' '{text}' > diffs/{name}\n"
         if log:
-            body += f"printf '%s\\n' '{log}'\n"
+            log_path = os.path.join(tmp, "forge-output.txt")
+            with open(log_path, "w") as f:
+                f.write(log)
+            body += f"cat '{log_path}'\n"
         with open(forge_script, "w") as f:
             f.write(body)
         forge = os.path.join(bindir, "forge")
@@ -69,6 +72,31 @@ def run_step(committed, produced, log=""):
         return outputs, text
 
 
+# forge -vv shape: per-suite results first, then the "Failing tests:" summary that names each test contract.
+FORGE_FAILURE_LOG = """Ran 1 test for src/p/PayloadC.t.sol:PayloadC_Test
+[FAIL: unknown hardfork 'monad:MonadTen' for key "default.hardfork" in inline config] setUp() (gas: 0)
+Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 381.41µs (0.00ns CPU time)
+
+Ran 3 tests for src/p/PayloadD.t.sol:PayloadD_Test
+[PASS] test_ok() (gas: 1)
+[FAIL: EvmError: Revert] test_swap() (gas: 918236)
+[FAIL: EvmError: Revert] test_price() (gas: 16991)
+Suite result: FAILED. 1 passed; 2 failed; 0 skipped; finished in 14.26s (10.66s CPU time)
+
+Ran 2 test suites in 15.94s (17.30s CPU time): 1 tests passed, 3 failed, 0 skipped (4 total tests)
+
+Failing tests:
+Encountered 1 failing test in src/p/PayloadC.t.sol:PayloadC_Test
+[FAIL: unknown hardfork 'monad:MonadTen' for key "default.hardfork" in inline config] setUp() (gas: 0)
+
+Encountered 2 failing tests in src/p/PayloadD.t.sol:PayloadD_Test
+[FAIL: EvmError: Revert] test_swap() (gas: 918236)
+[FAIL: EvmError: Revert] test_price() (gas: 16991)
+
+Encountered a total of 3 failing tests, 1 tests succeeded
+"""
+
+
 class DiffReportStepTest(unittest.TestCase):
     def test_several_ci_reports_are_all_kept_with_payload_headings(self):
         outputs, text = run_step({}, {"PayloadA.md": "alpha-body", "PayloadB.md": "beta-body"})
@@ -87,10 +115,14 @@ class DiffReportStepTest(unittest.TestCase):
     def test_partial_run_keeps_the_failing_test_status_alongside_reports(self):
         outputs, text = run_step(
             {}, {"PayloadA.md": "alpha-body", "PayloadB.md": "beta-body"},
-            log="[FAIL: revert] test_PayloadC_execution() (gas: 1)",
+            log=FORGE_FAILURE_LOG,
         )
         self.assertIn("alpha-body", text)
-        self.assertEqual(outputs["fork_test_status"], "test_PayloadC_execution")
+        self.assertEqual(
+            outputs["fork_test_status"],
+            "PayloadC_Test.setUp (unknown hardfork 'monad:MonadTen' for key \"default.hardfork\" in inline config); "
+            "PayloadD_Test.test_swap (EvmError: Revert); PayloadD_Test.test_price (EvmError: Revert)",
+        )
 
     def test_single_ci_report_is_kept(self):
         outputs, text = run_step({}, {"Only.md": "solo-body"})

@@ -370,5 +370,41 @@ class ListingSeedGroupingTests(unittest.TestCase):
         self.assertIn("0xSomeoneElse000000000000000000000000006", standalone[0]["line"])
 
 
+class FoldFlowsTests(unittest.TestCase):
+    TOKEN = "0xtoken"
+
+    def _ev(self, event, sender, to, raw="5", payload=0, section=TOKEN):
+        return {"event_name": event, "counterparty": sender, "recipient": to, "raw_amount": raw,
+                "amount": raw, "payload": payload, "section": section, "inline_symbol": None}
+
+    def test_hops_and_spent_approvals_fold_into_one_movement(self):
+        items = [
+            self._ev("Transfer", ra.ZERO_ADDRESS, "0xA"),
+            self._ev("Approval", "0xA", "0xB"),
+            self._ev("Transfer", "0xA", "0xB"),
+            self._ev("Transfer", "0xB", "0xC"),
+        ]
+        units = ra.fold_flows(items, {self.TOKEN: "GHO"})
+        self.assertEqual(len(units), 1)
+        unit = units[0]
+        self.assertEqual((unit["counterparty"], unit["recipient"], unit["asset"]), (ra.ZERO_ADDRESS, "0xC", "GHO"))
+        self.assertEqual([id(m) for m in unit["members"]], [id(i) for i in items])
+
+    def test_other_amount_payload_or_token_breaks_the_flow(self):
+        for nxt in (self._ev("Transfer", "0xB", "0xC", raw="4"),
+                    self._ev("Transfer", "0xB", "0xC", payload=1),
+                    self._ev("Transfer", "0xB", "0xC", section="0xother")):
+            with self.subTest(nxt=nxt):
+                units = ra.fold_flows([self._ev("Transfer", "0xA", "0xB"), nxt], {})
+                self.assertEqual(len(units), 2)
+                self.assertNotIn("members", units[0])
+
+    def test_excluded_items_are_left_alone_without_an_asset(self):
+        items = [self._ev("Approval", "0xA", "0xB"), self._ev("Transfer", "0xA", "0xB")]
+        units = ra.fold_flows(items, {self.TOKEN: "GHO"}, {id(i) for i in items})
+        self.assertEqual([id(u) for u in units], [id(i) for i in items])
+        self.assertNotIn("asset", units[0])
+
+
 if __name__ == "__main__":
     unittest.main()

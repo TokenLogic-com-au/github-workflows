@@ -498,5 +498,85 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertNotIn("[!WARNING]", out)
 
 
+class MultiChainBridgeProposalTests(unittest.TestCase):
+    """Real PR shape: GHO minted and bridged over CCIP on Ethereum, then moved from the Avalanche Collector."""
+
+    BRIDGE = "`GHO_CCIP_BRIDGE` (0x7F2f96fcdC3A29Be75938d2aC3D92E7006919fe6)"
+    COLLECTOR = "`AaveV3Avalanche.COLLECTOR` (0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0)"
+
+    def _build(self, fork_test_status=""):
+        return rac.build(
+            _read_fixture("usat_gsm_forum_ai_out.json"),
+            _read_fixture("usat_gsm_multichain_diff.md"),
+            "no scale-bound flags",
+            fork_test_status,
+            None,
+            ADDRESS_BOOK_SLICE,
+        )
+
+    def _flagged(self, out):
+        return [line for line in out.splitlines() if line.startswith("> 🟠 In payload but not in the forum post")]
+
+    def test_only_the_ccip_link_fee_is_flagged(self):
+        flagged = self._flagged(self._build())
+        self.assertEqual(
+            flagged,
+            [
+                f"> 🟠 In payload but not in the forum post: Transfer: 0.0470 `LINK` from {self.BRIDGE} "
+                "to 0xc3423F3FB30857D9C14717b119884b1B63d250b7",
+                "> 🟠 In payload but not in the forum post: Transfer: 0.0010 `LINK` from "
+                "0xc3423F3FB30857D9C14717b119884b1B63d250b7 to 0x6608d995bBDE874De5292bFD289643c88D176ED3",
+            ],
+        )
+
+    def test_the_fee_approval_stays_visible_under_the_fee_transfer(self):
+        self.assertIn(
+            f">   - Approval: {self.BRIDGE} approves 0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D to spend 0.0470 `LINK`",
+            self._build(),
+        )
+
+    def test_the_avalanche_collector_is_named_from_its_own_payload_chain(self):
+        self.assertIn(
+            f"Transfer: 65,000,000 `GHO` from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
+            self._build(),
+        )
+
+    def test_forum_items_matched_without_an_address_are_listed_for_a_recipient_check(self):
+        out = self._build()
+        self.assertIn(
+            "> Forum: Transfer 65,000,000 GHO to GHO Reserve (Avalanche); payload: Transfer: 65,000,000 `GHO` "
+            f"from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
+            out,
+        )
+        self.assertIn(
+            "> Forum: Mint 65,000,000 GHO to no recipient (Ethereum); payload: Mint: 65,000,000 `GHO` to "
+            "`GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
+            out,
+        )
+        for hop in (
+            ">   - Mint: 65,000,000 `GHO` to `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A)",
+            ">   - Approval: `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) approves "
+            f"{self.BRIDGE} to spend 65,000,000 `GHO`",
+            ">   - Transfer: 65,000,000 `GHO` from `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) "
+            f"to {self.BRIDGE}",
+            f">   - Approval: {self.BRIDGE} approves 0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D to spend "
+            "65,000,000 `GHO`",
+            f">   - Transfer: 65,000,000 `GHO` from {self.BRIDGE} to "
+            "`GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
+        ):
+            self.assertIn(hop, out)
+        self.assertIn("<summary>1 other forum items are not in this payload", out)
+
+    def test_every_failing_test_is_named_in_full(self):
+        status = (
+            "AaveV3Monad_PermissionedGSMUSATAvalanche_20261109_Test.setUp (unknown hardfork 'monad:MonadTen' "
+            'for key "default.hardfork" in inline config); '
+            "AaveV3Avalanche_PermissionedGSMUSATAvalanche_20261109_Part2_Test.test_permissionedSwap (EvmError: Revert); "
+            "AaveV3Avalanche_PermissionedGSMUSATAvalanche_20261109_Part2_Test.test_priceStrategyMatchesWaCoreUsat "
+            "(EvmError: Revert)"
+        )
+        self.assertIn("test_priceStrategyMatchesWaCoreUsat (EvmError: Revert)", self._build(status))
+
+
 if __name__ == "__main__":
     unittest.main()

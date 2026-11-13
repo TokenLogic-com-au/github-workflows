@@ -26,8 +26,8 @@ defaults:
     shell: bash
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
-  # Pinned to match upstream aave-proposals-v3 CI; newer Foundry refuses non-Ethereum forks.
-  FOUNDRY_VERSION: v1.7.1
+  # Same Foundry as upstream aave-proposals-v3's forge test job (test.yml), so a payload test passes here when it passes there; v1.7.1 cannot load Monad's network-qualified hardfork.
+  FOUNDRY_VERSION: nightly
 jobs:
   scope:
     # Scopes every job to the single src/<dir>/ the PR touches: count==0 skips all (green), count>1 fails.
@@ -366,7 +366,15 @@ jobs:
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
           # Read from the log even when reports exist: one payload's test can fail while others write reports.
-          fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
+          # forge's "Failing tests:" summary names each test contract; every failure is listed as Contract.test (reason).
+          fail_test=$(awk '
+            /^Encountered [0-9]+ failing tests? in / { n = split($NF, part, ":"); contract = part[n]; next }
+            /^$/ { contract = "" }
+            contract != "" && /^\[FAIL/ {
+              reason = $0; sub(/^\[FAIL:? ?/, "", reason); sub(/\] .*/, "", reason)
+              name = $0; sub(/^\[FAIL[^]]*\] /, "", name); sub(/\(.*/, "", name)
+              printf "%s%s.%s (%s)", sep, contract, name, reason; sep = "; "
+            }' forge-test.log)
           if [ -z "$fail_test" ] && [ -z "$report" ]; then
             fail_test="forge test failed with no further detail"
           fi

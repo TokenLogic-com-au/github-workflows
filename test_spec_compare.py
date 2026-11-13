@@ -193,5 +193,43 @@ class ForumOnlyTests(unittest.TestCase):
         self.assertEqual(out["forum_only_count"], 1)
 
 
+class AmountMatchTests(unittest.TestCase):
+    GHO_65M = {"amount": "65,000,000", "asset": "GHO", "recipient": "0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642"}
+
+    def _forum(self, recipient, network, asset="GHO", amount="65M"):
+        return {"action": "Transfer", "asset": asset, "amount": amount, "recipient": recipient, "network": network}
+
+    def test_named_recipient_matches_on_asset_and_amount_and_is_reported_as_unproven(self):
+        forum = [self._forum("GHO Reserve", "Avalanche")]
+        out = sc.compare(forum, [dict(self.GHO_65M, chain="Avalanche")])
+        self.assertEqual(out["unexplained"], [])
+        self.assertEqual(out["forum_only_count"], 0)
+        self.assertEqual(len(out["amount_matches"]), 1)
+        self.assertEqual(out["amount_matches"][0]["forum"]["recipient"], "GHO Reserve")
+
+    def test_same_network_forum_item_is_preferred(self):
+        forum = [self._forum(None, "Ethereum"), self._forum("GHO Reserve", "Avalanche")]
+        out = sc.compare(forum, [dict(self.GHO_65M, chain="Avalanche")])
+        self.assertEqual(out["amount_matches"][0]["forum"]["network"], "Avalanche")
+
+    def test_other_asset_or_amount_does_not_match(self):
+        for forum_item in (self._forum("GHO Reserve", "Avalanche", asset="USDC"),
+                           self._forum("GHO Reserve", "Avalanche", amount="6.5M")):
+            with self.subTest(forum_item=forum_item):
+                out = sc.compare([forum_item], [dict(self.GHO_65M, chain="Avalanche")])
+                self.assertEqual(len(out["unexplained"]), 1)
+                self.assertEqual(out["amount_matches"], [])
+
+    def test_forum_item_with_an_address_never_matches_on_amount_alone(self):
+        forum = [self._forum("0x1111111111111111111111111111111111111111", "Avalanche")]
+        out = sc.compare(forum, [dict(self.GHO_65M, chain="Avalanche")])
+        self.assertEqual(len(out["unexplained"]), 1)
+
+    def test_payload_item_without_an_asset_never_matches_on_amount(self):
+        forum = [self._forum("GHO Reserve", "Avalanche")]
+        out = sc.compare(forum, [dict(self.GHO_65M, asset=None)])
+        self.assertEqual(len(out["unexplained"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

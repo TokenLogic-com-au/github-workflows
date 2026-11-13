@@ -8,7 +8,7 @@ transferFrom, so merging equal amounts could hide a live allowance.
 """
 import re
 
-from address_book import INLINE_SYMBOL_RE
+from address_book import INLINE_SYMBOL_RE, infer_chain
 
 DECODED_VALUE_RE = re.compile(
     r"(?P<human>[\d,]+(?:\.\d+)?)\s*\[\s*(?P<raw>\d+)\s*,\s*(?P<decimals>\d+)\s*decimals\s*\]"
@@ -25,6 +25,7 @@ USER_ADDRESS_RE = re.compile(r"\buser:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
 BALANCE_INCREASE_RE = re.compile(r"\bbalanceIncrease:?\s*([\d,]+)", re.IGNORECASE)
 EVENT_NAME_RE = re.compile(r"\b([A-Z][A-Za-z0-9]*)\(")
 SECTION_HEADER_RE = re.compile(r"^####\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
+PAYLOAD_HEADING = "# Payload report:"
 # AToken._mintScaled emits the Mint on the line right after the Transfer; wider risks false pairs.
 MINT_PAIR_WINDOW = 1
 
@@ -78,6 +79,16 @@ def _line_sections(lines: list) -> list:
             current = m.group(1).lower()
         sections.append(current)
     return sections
+
+
+def _line_payloads(lines: list) -> list:
+    """Per line: (payload index, chain) of its `# Payload report:` part, so each payload names parties on its own chain."""
+    starts = [0] + [i for i, line in enumerate(lines) if line.startswith(PAYLOAD_HEADING)]
+    out = []
+    for payload, (start, end) in enumerate(zip(starts, starts[1:] + [len(lines)])):
+        chain = infer_chain("\n".join(lines[start:end]))
+        out += [(payload, chain)] * (end - start)
+    return out
 
 
 def _is_superseded_zero_approval(
@@ -135,6 +146,7 @@ def parse_payload_actions(diff_report_text: str):
     actions = []
     lines = diff_report_text.splitlines()
     sections = _line_sections(lines)
+    payloads = _line_payloads(lines)
     for idx, line in enumerate(lines):
         m = DECODED_VALUE_RE.search(line)
         if not m:
@@ -171,6 +183,8 @@ def parse_payload_actions(diff_report_text: str):
                 "raw_line": line.strip(),
                 "event_name": event_name_m.group(1) if event_name_m else None,
                 "section": sections[idx],
+                "payload": payloads[idx][0],
+                "chain": payloads[idx][1],
                 "counterparty": counterparty_m.group(1) if counterparty_m else None,
                 "on_behalf_of": on_behalf_of_m.group(1) if on_behalf_of_m else None,
                 "user": user_m.group(1) if user_m else None,

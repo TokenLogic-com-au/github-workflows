@@ -31,15 +31,15 @@ def _amount_text(item, symbol_map):
     return amount
 
 
-def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=None) -> str:
-    """Readable line for one payload item; `solidity_labels`/`chain` name parties the diff report never labelled."""
+def describe_action(item, label_map, symbol_map, solidity_labels=None) -> str:
+    """Readable line for one payload item; `solidity_labels` on the item's own chain name parties the diff report never labelled."""
     event_name = item.get("event_name") or item.get("action")
     recipient = item.get("recipient")
     counterparty = item.get("counterparty")
     amount_text = _amount_text(item, symbol_map)
 
     def _addr(a):
-        return describe_address(a, label_map, symbol_map, solidity_labels, chain)
+        return describe_address(a, label_map, symbol_map, solidity_labels, item.get("chain"))
 
     if event_name == "Approval":
         owner_label = _addr(counterparty)
@@ -63,9 +63,7 @@ def describe_action(item, label_map, symbol_map, solidity_labels=None, chain=Non
     return f"{event_name or 'Event'}: {amount_text}, contract {recipient_label}"
 
 
-def find_seed_groups(
-    items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
-):
+def find_seed_groups(items, label_map, symbol_map, new_reserves=None, solidity_labels=None):
     """Groups a Supply with the Approval, Transfer and aToken mint that fund it (same payer, pool, reserve, amount).
 
     A Supply's `recipient` is the reserve address (first address on the line, no `to:`), the key used to find
@@ -84,6 +82,7 @@ def find_seed_groups(
         if not reserve_addr or not pool_addr or not beneficiary or not payer:
             continue
         payer_lower = payer.lower()
+        chain = supply.get("chain")
         listing = (new_reserves or {}).get(reserve_addr)
 
         approval = next(
@@ -155,7 +154,7 @@ def find_seed_groups(
             {
                 "line": summary,
                 "sub_lines": [
-                    describe_action(m, label_map, symbol_map, solidity_labels, chain) for m in members
+                    describe_action(m, label_map, symbol_map, solidity_labels) for m in members
                 ],
                 "members": members,
                 "kind": kind,
@@ -163,18 +162,15 @@ def find_seed_groups(
                 "beneficiary": beneficiary,
                 "pool": pool_addr,
                 "reserve": reserve_addr,
+                "chain": chain,
             }
         )
     return groups
 
 
-def build_readable_findings(
-    items, label_map, symbol_map, new_reserves=None, solidity_labels=None, chain=None
-):
-    """Returns [{"line", "sub_lines"}] per item, skipping ReserveDataUpdated; seed flows collapse into one line."""
-    seed_groups = find_seed_groups(
-        items, label_map, symbol_map, new_reserves, solidity_labels, chain
-    )
+def build_readable_findings(items, label_map, symbol_map, new_reserves=None, solidity_labels=None):
+    """Returns [{"line", "sub_lines"}] per item, skipping ReserveDataUpdated; seed flows collapse into one line, a folded flow lists its members."""
+    seed_groups = find_seed_groups(items, label_map, symbol_map, new_reserves, solidity_labels)
     grouped_ids = {id(member) for group in seed_groups for member in group["members"]}
     findings = [
         {key: g[key] for key in ("line", "sub_lines")}
@@ -187,8 +183,92 @@ def build_readable_findings(
             continue
         findings.append(
             {
-                "line": describe_action(item, label_map, symbol_map, solidity_labels, chain),
-                "sub_lines": [],
+                "line": describe_action(item, label_map, symbol_map, solidity_labels),
+                "sub_lines": flow_sub_lines(item, label_map, symbol_map, solidity_labels),
             }
         )
     return findings
+
+
+def flow_sub_lines(unit, label_map, symbol_map, solidity_labels=None):
+    return [describe_action(m, label_map, symbol_map, solidity_labels) for m in unit.get("members", ())]
+
+
+def fold_flows(items, symbol_map, exclude_ids=()):
+    """Folds token hops and the approvals they spend into one movement unit per flow, each unit with its `asset` symbol.
+
+    A hop continues a flow when it moves the same raw amount of the same token in the same payload out of the address
+    the previous hop paid; an approval joins when its owner sends that amount in a later hop. Members stay in
+    `members`, so a folded approval is shown, never dropped. Items in `exclude_ids` (supply flows) are left alone and
+    get no `asset`: spec_compare then never matches them on amount, so a supply flow is judged as one group, not piecewise.
+    """
+    def same_flow(a, b):
+        return (a.get("payload"), a.get("section"), a.get("raw_amount")) == (
+            b.get("payload"), b.get("section"), b.get("raw_amount")
+        )
+
+    def lower(addr):
+        return (addr or "").lower()
+
+    candidates = [
+        (pos, it)
+        for pos, it in enumerate(items)
+        if id(it) not in exclude_ids and it.get("event_name") in ("Transfer", "Approval") and it.get("raw_amount") != "0"
+    ]
+    used = set()
+    units_at = {}
+    for pos, head in candidates:
+        if id(head) in used or head.get("event_name") != "Transfer":
+            continue
+        hops = [(pos, head)]
+        used.add(id(head))
+        while True:
+            last_pos, last = hops[-1]
+            nxt = next(
+                (
+                    (p, it)
+                    for p, it in candidates
+                    if p > last_pos
+                    and id(it) not in used
+                    and it.get("event_name") == "Transfer"
+                    and same_flow(it, head)
+                    and lower(it.get("counterparty")) == lower(last.get("recipient"))
+                ),
+                None,
+            )
+            if nxt is None:
+                break
+            hops.append(nxt)
+            used.add(id(nxt[1]))
+        members = list(hops)
+        for hop_pos, hop in hops:
+            approval = next(
+                (
+                    (p, it)
+                    for p, it in candidates
+                    if p < hop_pos
+                    and id(it) not in used
+                    and it.get("event_name") == "Approval"
+                    and same_flow(it, head)
+                    and lower(it.get("counterparty")) == lower(hop.get("counterparty"))
+                ),
+                None,
+            )
+            if approval:
+                members.append(approval)
+                used.add(id(approval[1]))
+        if len(members) > 1:
+            tail = hops[-1][1]
+            units_at[pos] = {
+                **tail,
+                "counterparty": head.get("counterparty"),
+                "members": [it for _, it in sorted(members, key=lambda m: m[0])],
+            }
+    folded = {id(m) for unit in units_at.values() for m in unit["members"]}
+    units = []
+    for pos, item in enumerate(items):
+        if pos in units_at:
+            units.append(units_at[pos])
+        elif id(item) not in folded:
+            units.append(item)
+    return [u if id(u) in exclude_ids else {**u, "asset": _token_symbol(u, symbol_map)} for u in units]

@@ -423,5 +423,20 @@ class ApprovalRecipientTests(unittest.TestCase):
         self.assertEqual(amounts, ["0", "5"])
 
 
+class PayloadChainTests(unittest.TestCase):
+    def test_each_payload_report_gets_its_own_chain(self):
+        line = "| 1 | Transfer(from: 0x{a}, to: 0x{b}, value: 1 [1, 0 decimals]) |"
+        text = "\n".join([
+            "# Payload report: A",
+            "#### 0x" + "1" * 40 + " (AaveV3Avalanche.ASSETS.GHO.UNDERLYING)",
+            line.format(a="2" * 40, b="3" * 40),
+            "# Payload report: B",
+            "#### 0x" + "1" * 40 + " (AaveV3Ethereum.ASSETS.GHO.UNDERLYING, GovernanceV3Ethereum.EXECUTOR_LVL_1)",
+            line.format(a="2" * 40, b="3" * 40),
+        ])
+        items = dp.parse_payload_actions(text)
+        self.assertEqual([(i["payload"], i["chain"]) for i in items], [(1, "Avalanche"), (2, "Ethereum")])
+
+
 if __name__ == "__main__":
     unittest.main()
