@@ -4,6 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import readable_actions
 import render_advisory_comment as rac
 
 CLEAN_FORUM = json.dumps({"forum": [
@@ -496,6 +497,132 @@ class ListingSeedNoteTests(unittest.TestCase):
         self.assertIn(self.FORUM_LINE, out)
         self.assertNotIn("other forum items", out)
         self.assertNotIn("[!WARNING]", out)
+
+
+class MultiChainBridgeProposalTests(unittest.TestCase):
+    """Real PR shape: GHO minted and bridged over CCIP on Ethereum, then moved from the Avalanche Collector."""
+
+    BRIDGE = "`GHO_CCIP_BRIDGE` (0x7F2f96fcdC3A29Be75938d2aC3D92E7006919fe6)"
+    COLLECTOR = "`AaveV3Avalanche.COLLECTOR` (0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0)"
+
+    def _build(self, fork_test_status=""):
+        return rac.build(
+            _read_fixture("usat_gsm_forum_ai_out.json"),
+            _read_fixture("usat_gsm_multichain_diff.md"),
+            "no scale-bound flags",
+            fork_test_status,
+            None,
+            ADDRESS_BOOK_SLICE,
+        )
+
+    def _flagged(self, out):
+        return [line for line in out.splitlines() if line.startswith("> 🟠 In payload but not in the forum post")]
+
+    def test_the_ccip_link_fee_and_the_router_allowances_are_flagged(self):
+        flagged = self._flagged(self._build())
+        router = "0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D"
+        self.assertEqual(
+            flagged,
+            [
+                f"> 🟠 In payload but not in the forum post: Approval: {self.BRIDGE} approves {router} to spend "
+                "65,000,000 `GHO`",
+                f"> 🟠 In payload but not in the forum post: Approval: {self.BRIDGE} approves {router} to spend "
+                "0.0470 `LINK`",
+                f"> 🟠 In payload but not in the forum post: Transfer: 0.0470 `LINK` from {self.BRIDGE} "
+                "to 0xc3423F3FB30857D9C14717b119884b1B63d250b7",
+                "> 🟠 In payload but not in the forum post: Transfer: 0.0010 `LINK` from "
+                "0xc3423F3FB30857D9C14717b119884b1B63d250b7 to 0x6608d995bBDE874De5292bFD289643c88D176ED3",
+            ],
+        )
+
+    def test_the_avalanche_collector_is_named_from_its_own_payload_chain(self):
+        self.assertIn(
+            f"Transfer: 65,000,000 `GHO` from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
+            self._build(),
+        )
+
+    def test_forum_items_matched_without_an_address_are_listed_for_a_recipient_check(self):
+        out = self._build()
+        lines = out.splitlines()
+        for line in (
+            "> Forum: Transfer 65,000,000 GHO to GHO Reserve (Avalanche)",
+            f"> Payload: Transfer: 65,000,000 `GHO` from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
+            "> Forum: Mint 65,000,000 GHO to unknown recipient (Ethereum)",
+            "> Payload: Mint: 65,000,000 `GHO` to `GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
+        ):
+            self.assertIn(line, lines)
+        for hop in (
+            ">   - Mint: 65,000,000 `GHO` to `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A)",
+            ">   - Approval: `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) approves "
+            f"{self.BRIDGE} to spend 65,000,000 `GHO`",
+            ">   - Transfer: 65,000,000 `GHO` from `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) "
+            f"to {self.BRIDGE}",
+            f">   - Transfer: 65,000,000 `GHO` from {self.BRIDGE} to "
+            "`GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
+        ):
+            self.assertIn(hop, out)
+        self.assertIn("<summary>1 other forum items are not in this payload", out)
+
+    def test_every_failing_test_is_named_in_full(self):
+        status = (
+            "AaveV3Monad_PermissionedGSMUSATAvalanche_20261109_Test.setUp (unknown hardfork 'monad:MonadTen' "
+            'for key "default.hardfork" in inline config); '
+            "AaveV3Avalanche_PermissionedGSMUSATAvalanche_20261109_Part2_Test.test_permissionedSwap (EvmError: Revert); "
+            "AaveV3Avalanche_PermissionedGSMUSATAvalanche_20261109_Part2_Test.test_priceStrategyMatchesWaCoreUsat "
+            "(EvmError: Revert)"
+        )
+        self.assertIn("test_priceStrategyMatchesWaCoreUsat (EvmError: Revert)", self._build(status))
+
+class AmountMatchRenderTests(unittest.TestCase):
+    PAYLOAD = {"event_name": "Transfer", "counterparty": "0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0",
+               "recipient": "0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642", "amount": "65,000,000",
+               "inline_symbol": "GHO", "section": "0xtoken"}
+
+    def _notes(self, recipient):
+        forum = {"action": "Transfer", "kind": "movement", "asset": "GHO", "amount": "65,000,000", "recipient": recipient, "network": "Avalanche"}
+        return rac.describe_matches([{"forum": forum, "payload": self.PAYLOAD}], {}, {}, None)
+
+    def test_an_amount_match_is_not_reported_as_no_mismatch(self):
+        comparison = {"warnings": [], "notes": [], "forum_only_count": 0}
+        out = rac.render_comparison_alerts(comparison, [], 0, (), self._notes("GHO Reserve"))
+        self.assertNotIn("No mismatches found", out)
+        self.assertIn("> Matched on asset and amount only (the forum gives no recipient address); check each recipient:", out)
+
+    def test_a_long_forum_recipient_never_hides_the_payload_recipient(self):
+        comparison = {"warnings": [], "notes": [], "forum_only_count": 0}
+        out = rac.render_comparison_alerts(comparison, [], 0, (), self._notes("the reserve " * 100))
+        self.assertIn("> Payload: Transfer: 65,000,000 `GHO` from 0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0 "
+                      "to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642", out.splitlines())
+
+class FoldedAddressMatchTests(unittest.TestCase):
+    EX = "0x1000000000000000000000000000000000000001"
+    ATT = "0x2000000000000000000000000000000000000002"
+    GOOD = "0x3000000000000000000000000000000000000003"
+
+    def _ev(self, event, sender, to):
+        return {"event_name": event, "counterparty": sender, "recipient": to, "raw_amount": "65", "amount": "65",
+                "payload": 0, "section": "0xtoken", "inline_symbol": "GHO"}
+
+    def _render(self, items):
+        units = readable_actions.fold_flows(items, {})
+        forum = [{"action": "Transfer", "kind": "movement", "asset": "GHO", "amount": "65", "recipient": self.GOOD,
+                  "network": "Ethereum"}]
+        cmp = rac.compare_around_seeds(forum, [], units)
+        notes = rac.describe_matches(cmp["folded_address_matches"], {}, {}, None)
+        return rac.render_comparison_alerts(cmp, [], 0, (), (), notes).splitlines()
+
+    def test_hops_through_other_addresses_stay_visible_on_an_address_match(self):
+        lines = self._render([self._ev("Approval", self.EX, self.ATT), self._ev("Transfer", self.EX, self.ATT),
+                              self._ev("Transfer", self.ATT, self.GOOD)])
+        self.assertNotIn("> No mismatches found between the payload and the forum post.", lines)
+        self.assertIn("> Matched on the final recipient only; check each hop and allowance:", lines)
+        self.assertIn(f">   - Approval: {self.EX} approves {self.ATT} to spend 65 `GHO`", lines)
+        self.assertIn(f">   - Transfer: 65 `GHO` from {self.EX} to {self.ATT}", lines)
+
+    def test_a_hop_without_an_approval_stays_visible_too(self):
+        lines = self._render([self._ev("Transfer", self.EX, self.ATT), self._ev("Transfer", self.ATT, self.GOOD)])
+        self.assertNotIn("> No mismatches found between the payload and the forum post.", lines)
+        self.assertIn(f">   - Transfer: 65 `GHO` from {self.EX} to {self.ATT}", lines)
 
 
 if __name__ == "__main__":

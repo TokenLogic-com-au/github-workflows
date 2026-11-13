@@ -26,8 +26,8 @@ defaults:
     shell: bash
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
-  # Pinned to match upstream aave-proposals-v3 CI; newer Foundry refuses non-Ethereum forks.
-  FOUNDRY_VERSION: v1.7.1
+  # Same Foundry as upstream aave-proposals-v3's forge test job (test.yml), so a payload test passes here when it passes there; v1.7.1 cannot load Monad's network-qualified hardfork.
+  FOUNDRY_VERSION: nightly
 jobs:
   scope:
     # Scopes every job to the single src/<dir>/ the PR touches: count==0 skips all (green), count>1 fails.
@@ -366,8 +366,27 @@ jobs:
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
           # Read from the log even when reports exist: one payload's test can fail while others write reports.
-          fail_test=$(sed -nE 's/^\[FAIL:[^]]*\] ([A-Za-z0-9_]+)\(.*/\1/p' forge-test.log | head -1)
-          if [ -z "$fail_test" ] && [ -z "$report" ]; then
+          # Every failure is listed as Contract.test (reason): from forge's "Failing tests:" summary, else from the per-suite results.
+          # The test name is the LAST "] name(" on the line, because a reason or fuzz args can hold "] ".
+          fail_test=$(awk '
+            function failure(line,   rest, cut, reason, name) {
+              rest = line; cut = 0
+              while (match(rest, /\] [A-Za-z_][A-Za-z0-9_]*\(/)) { cut += RSTART; rest = substr(rest, RSTART + 1) }
+              if (!cut) return ""
+              reason = substr(line, 1, cut - 1); sub(/^\[FAIL:? ?/, "", reason)
+              name = substr(line, cut + 2); sub(/\(.*/, "", name)
+              return contract "." name (reason == "" ? "" : " (" reason ")")
+            }
+            /^Ran [0-9]+ tests? for / || /^Encountered [0-9]+ failing tests? in / { n = split($NF, part, ":"); contract = part[n]; summary_seen = summary_seen || /^Encountered/; next }
+            /^$/ { contract = "" }
+            contract != "" && /^\[FAIL/ {
+              f = failure($0)
+              if (f == "") next
+              if (summary_seen) { summary = summary ssep f; ssep = "; " } else { suite = suite usep f; usep = "; " }
+            }
+            END { print (summary != "" ? summary : suite) }' forge-test.log)
+          # No report, or a FAIL line no test name could be read from: still warn.
+          if [ -z "$fail_test" ] && { [ -z "$report" ] || grep -q '^\[FAIL' forge-test.log; }; then
             fail_test="forge test failed with no further detail"
           fi
           echo "fork_test_status=$fail_test" >> "$GITHUB_OUTPUT"

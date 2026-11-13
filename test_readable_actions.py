@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import address_book as ab
 import diff_parser as dp
 import readable_actions as ra
+import spec_compare as sc
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures")
 
@@ -368,6 +369,52 @@ class ListingSeedGroupingTests(unittest.TestCase):
         standalone = [f for f in findings if not f["sub_lines"]]
         self.assertEqual(len(standalone), 1)
         self.assertIn("0xSomeoneElse000000000000000000000000006", standalone[0]["line"])
+
+
+class FoldFlowsTests(unittest.TestCase):
+    TOKEN = "0xtoken"
+
+    def _ev(self, event, sender, to, raw="5", payload=0, section=TOKEN):
+        return {"event_name": event, "counterparty": sender, "recipient": to, "raw_amount": raw,
+                "amount": raw, "payload": payload, "section": section, "inline_symbol": None}
+
+    def test_hops_and_spent_approvals_fold_into_one_movement(self):
+        items = [
+            self._ev("Transfer", ra.ZERO_ADDRESS, "0xA"),
+            self._ev("Approval", "0xA", "0xB"),
+            self._ev("Transfer", "0xA", "0xB"),
+            self._ev("Transfer", "0xB", "0xC"),
+        ]
+        units = ra.fold_flows(items, {self.TOKEN: "GHO"})
+        self.assertEqual(len(units), 1)
+        unit = units[0]
+        self.assertEqual((unit["counterparty"], unit["recipient"], unit["asset"]), (ra.ZERO_ADDRESS, "0xC", "GHO"))
+        self.assertEqual([id(m) for m in unit["members"]], [id(i) for i in items])
+
+    def test_other_amount_payload_or_token_breaks_the_flow(self):
+        for nxt in (self._ev("Transfer", "0xB", "0xC", raw="4"),
+                    self._ev("Transfer", "0xB", "0xC", payload=1),
+                    self._ev("Transfer", "0xB", "0xC", section="0xother")):
+            with self.subTest(nxt=nxt):
+                units = ra.fold_flows([self._ev("Transfer", "0xA", "0xB"), nxt], {})
+                self.assertEqual(len(units), 2)
+                self.assertNotIn("members", units[0])
+
+    def test_excluded_items_are_left_alone_without_an_asset(self):
+        items = [self._ev("Approval", "0xA", "0xB"), self._ev("Transfer", "0xA", "0xB")]
+        units = ra.fold_flows(items, {self.TOKEN: "GHO"}, {id(i) for i in items})
+        self.assertEqual([id(u) for u in units], [id(i) for i in items])
+        self.assertNotIn("asset", units[0])
+
+    def test_approval_to_a_spender_outside_the_flow_is_never_folded(self):
+        approval = self._ev("Approval", "0xEX", "0xATTACKER", raw="65")
+        transfer = self._ev("Transfer", "0xEX", "0x1111111111111111111111111111111111111111", raw="65")
+        units = ra.fold_flows([approval, transfer], {self.TOKEN: "GHO"})
+        self.assertEqual([u["recipient"] for u in units], ["0xATTACKER", "0x1111111111111111111111111111111111111111"])
+        forum = [{"action": "Transfer", "asset": "GHO", "amount": "65",
+                  "recipient": "0x1111111111111111111111111111111111111111", "network": None}]
+        out = sc.compare(forum, units)
+        self.assertEqual([u["recipient"] for u in out["unexplained"]], ["0xATTACKER"])
 
 
 if __name__ == "__main__":

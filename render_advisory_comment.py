@@ -80,7 +80,7 @@ def _forum_seed_line(forum_item) -> str:
     return f"Forum: {' '.join(described)} to {forum_item.get('recipient') or 'unknown recipient'}"
 
 
-def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain):
+def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves, solidity_labels):
     """Proves listing seeds over all payload items before the forum compare, so the forum cannot choose the seed.
 
     Proven: beneficiary is DUST_BIN and pool is POOL in the address book; taken only when a reserve has exactly one.
@@ -88,13 +88,15 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
     proven = [
         group
         for group in readable_actions.find_seed_groups(
-            payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
+            payload_items, label_map, symbol_map, new_reserves, solidity_labels
         )
         if group["kind"] == readable_actions.LISTING_SEED_KIND
         and address_book.names_book_constant(
-            group["beneficiary"], solidity_labels, chain, address_book.DUST_BIN_CONSTANT
+            group["beneficiary"], solidity_labels, group["chain"], address_book.DUST_BIN_CONSTANT
         )
-        and address_book.names_book_constant(group["pool"], solidity_labels, chain, address_book.POOL_CONSTANT)
+        and address_book.names_book_constant(
+            group["pool"], solidity_labels, group["chain"], address_book.POOL_CONSTANT
+        )
     ]
     per_reserve = Counter(group["reserve"] for group in proven)
     taken = [group for group in proven if per_reserve[group["reserve"]] == 1]
@@ -103,7 +105,10 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
 
 
 def compare_around_seeds(forum_items, seed_groups, remaining_items):
-    """Seed members compare first so event order cannot let a seed explain another movement; their `unexplained` is dropped (seed proof covers it)."""
+    """Seed members compare first so event order cannot let a seed explain another movement; their `unexplained` is dropped (seed proof covers it).
+
+    Seed members are not folded and carry no `asset`, so only the second compare has `amount_matches` and `folded_address_matches`.
+    """
     seed_members = [member for group in seed_groups for member in group["members"]]
     seed_cmp = spec_compare.compare(forum_items, seed_members)
     comparison = spec_compare.compare(seed_cmp["forum_only"], remaining_items)
@@ -134,8 +139,39 @@ def _render_seed_notes(seed_notes) -> str:
     return "> [!NOTE]\n" + "\n".join(lines)
 
 
+def describe_matches(matches, label_map, symbol_map, solidity_labels):
+    """One note per matched forum item, with the payload movement and its folded hops."""
+    return [
+        {
+            "forum_line": f"{_forum_seed_line(pair['forum'])} ({pair['forum'].get('network') or 'no network'})",
+            "payload_line": "Payload: "
+            + readable_actions.describe_action(pair["payload"], label_map, symbol_map, solidity_labels),
+            "sub_lines": readable_actions.flow_sub_lines(pair["payload"], label_map, symbol_map, solidity_labels),
+        }
+        for pair in matches
+    ]
+
+
+AMOUNT_MATCH_HEADER = "Matched on asset and amount only (the forum gives no recipient address); check each recipient:"
+FOLDED_MATCH_HEADER = "Matched on the final recipient only; check each hop and allowance:"
+
+
+def _render_match_notes(header, match_notes) -> str:
+    lines = ["> [!NOTE]", f"> {header}"]
+    for note in match_notes:
+        # forum and payload get their own capped lines, so a long forum text cannot cut off the payload recipient
+        raw_lines = [f"> {note['forum_line']}", f"> {note['payload_line']}"] + [f">   - {sub}" for sub in note["sub_lines"]]
+        lines += [_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP) for raw in raw_lines]
+    return "\n".join(lines)
+
+
 def render_comparison_alerts(
-    comparison: dict, readable_findings: list, omitted_index_updates: int = 0, seed_notes: list = ()
+    comparison: dict,
+    readable_findings: list,
+    omitted_index_updates: int = 0,
+    seed_notes: list = (),
+    amount_match_notes: list = (),
+    folded_match_notes: list = (),
 ) -> str:
     """`readable_findings` is required so a forgotten build fails loudly instead of printing "No mismatches found"."""
     blocks = []
@@ -155,8 +191,12 @@ def render_comparison_alerts(
             for w in comparison["warnings"]
         ]
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
-    if not readable_findings and not comparison["warnings"]:
+    if not readable_findings and not comparison["warnings"] and not amount_match_notes and not folded_match_notes:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
+    if amount_match_notes:
+        blocks.append(_render_match_notes(AMOUNT_MATCH_HEADER, amount_match_notes))
+    if folded_match_notes:
+        blocks.append(_render_match_notes(FOLDED_MATCH_HEADER, folded_match_notes))
     if seed_notes:
         blocks.append(_render_seed_notes(seed_notes))
     if comparison.get("notes"):
@@ -203,7 +243,7 @@ def build(
         return "\n".join(parts)
 
     payload_items = diff_parser.parse_payload_actions(diff_report_text)
-    fork_test_status = sanitize_markdown(fork_test_status.strip(), 300)
+    fork_test_status = _truncate_at_word_boundary(sanitize_markdown(fork_test_status.strip()), FINDING_LINE_CAP)
     if not payload_items:
         if fork_test_status:
             parts.append(
@@ -228,19 +268,34 @@ def build(
     label_map, symbol_map = address_book.build_maps(diff_report_text)
     new_reserves = address_book.new_reserves(diff_report_text)
     solidity_labels = address_book.load_solidity_labels(address_book_root)
-    chain = address_book.infer_chain(diff_report_text)
     seed_groups, remaining_items = take_proven_listing_seeds(
-        payload_items, label_map, symbol_map, new_reserves, solidity_labels, chain
+        payload_items, label_map, symbol_map, new_reserves, solidity_labels
     )
-    comparison = compare_around_seeds(forum_items, seed_groups, remaining_items)
+    supply_flow_ids = {
+        id(member)
+        for group in readable_actions.find_seed_groups(
+            remaining_items, label_map, symbol_map, new_reserves, solidity_labels
+        )
+        for member in group["members"]
+    }
+    units = readable_actions.fold_flows(remaining_items, symbol_map, supply_flow_ids)
+    comparison = compare_around_seeds(forum_items, seed_groups, units)
     readable_findings = readable_actions.build_readable_findings(
-        comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels, chain
+        comparison["unexplained"], label_map, symbol_map, new_reserves, solidity_labels
+    )
+    amount_match_notes = describe_matches(comparison["amount_matches"], label_map, symbol_map, solidity_labels)
+    folded_match_notes = describe_matches(
+        comparison["folded_address_matches"], label_map, symbol_map, solidity_labels
     )
     seed_notes, forum_only = pair_seed_notes(seed_groups, comparison["forum_only"])
     comparison = {**comparison, "forum_only": forum_only, "forum_only_count": len(forum_only)}
     # raw report, not deduped items: an index can update more than once
     omitted_index_updates = diff_parser.count_reserve_data_updates(diff_report_text)
-    parts.append(render_comparison_alerts(comparison, readable_findings, omitted_index_updates, seed_notes))
+    parts.append(
+        render_comparison_alerts(
+            comparison, readable_findings, omitted_index_updates, seed_notes, amount_match_notes, folded_match_notes
+        )
+    )
     parts.append("")
     parts.append(render_scale_alert(scale_out_text))
     return "\n".join(parts)

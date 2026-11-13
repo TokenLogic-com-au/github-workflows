@@ -13,6 +13,7 @@ explanation before or after. The exact shape:
 
 {"forum": [
   {"action": "<short verb phrase, e.g. 'Reimburse', 'Approve', 'Refresh Allowance'>",
+   "kind": "<'allowance' when the action sets, refreshes or cancels an allowance; 'movement' when tokens move>",
    "asset": "<token symbol as written, e.g. 'aEthLidoGHO'>",
    "amount": "<the number as written, e.g. '50,000' or '0.5M' or 'Current Balance + buffer'>",
    "recipient": "<name or address as written, or null>",
