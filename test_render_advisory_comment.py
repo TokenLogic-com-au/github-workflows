@@ -517,22 +517,21 @@ class MultiChainBridgeProposalTests(unittest.TestCase):
     def _flagged(self, out):
         return [line for line in out.splitlines() if line.startswith("> 🟠 In payload but not in the forum post")]
 
-    def test_only_the_ccip_link_fee_is_flagged(self):
+    def test_the_ccip_link_fee_and_the_router_allowances_are_flagged(self):
         flagged = self._flagged(self._build())
+        router = "0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D"
         self.assertEqual(
             flagged,
             [
+                f"> 🟠 In payload but not in the forum post: Approval: {self.BRIDGE} approves {router} to spend "
+                "65,000,000 `GHO`",
+                f"> 🟠 In payload but not in the forum post: Approval: {self.BRIDGE} approves {router} to spend "
+                "0.0470 `LINK`",
                 f"> 🟠 In payload but not in the forum post: Transfer: 0.0470 `LINK` from {self.BRIDGE} "
                 "to 0xc3423F3FB30857D9C14717b119884b1B63d250b7",
                 "> 🟠 In payload but not in the forum post: Transfer: 0.0010 `LINK` from "
                 "0xc3423F3FB30857D9C14717b119884b1B63d250b7 to 0x6608d995bBDE874De5292bFD289643c88D176ED3",
             ],
-        )
-
-    def test_the_fee_approval_stays_visible_under_the_fee_transfer(self):
-        self.assertIn(
-            f">   - Approval: {self.BRIDGE} approves 0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D to spend 0.0470 `LINK`",
-            self._build(),
         )
 
     def test_the_avalanche_collector_is_named_from_its_own_payload_chain(self):
@@ -543,24 +542,20 @@ class MultiChainBridgeProposalTests(unittest.TestCase):
 
     def test_forum_items_matched_without_an_address_are_listed_for_a_recipient_check(self):
         out = self._build()
-        self.assertIn(
-            "> Forum: Transfer 65,000,000 GHO to GHO Reserve (Avalanche); payload: Transfer: 65,000,000 `GHO` "
-            f"from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
-            out,
-        )
-        self.assertIn(
-            "> Forum: Mint 65,000,000 GHO to no recipient (Ethereum); payload: Mint: 65,000,000 `GHO` to "
-            "`GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
-            out,
-        )
+        lines = out.splitlines()
+        for line in (
+            "> Forum: Transfer 65,000,000 GHO to GHO Reserve (Avalanche)",
+            f"> Payload: Transfer: 65,000,000 `GHO` from {self.COLLECTOR} to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642",
+            "> Forum: Mint 65,000,000 GHO to unknown recipient (Ethereum)",
+            "> Payload: Mint: 65,000,000 `GHO` to `GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
+        ):
+            self.assertIn(line, lines)
         for hop in (
             ">   - Mint: 65,000,000 `GHO` to `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A)",
             ">   - Approval: `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) approves "
             f"{self.BRIDGE} to spend 65,000,000 `GHO`",
             ">   - Transfer: 65,000,000 `GHO` from `EXECUTOR` (0x5300A1a15135EA4dc7aD5a167152C01EFc9b192A) "
             f"to {self.BRIDGE}",
-            f">   - Approval: {self.BRIDGE} approves 0x80226fc0Ee2b096224EeAc085Bb9a8cba1146f7D to spend "
-            "65,000,000 `GHO`",
             f">   - Transfer: 65,000,000 `GHO` from {self.BRIDGE} to "
             "`GHO_CCIP_TOKEN_POOL` (0x06179f7C1be40863405f374E7f5F8806c728660A)",
         ):
@@ -576,6 +571,27 @@ class MultiChainBridgeProposalTests(unittest.TestCase):
             "(EvmError: Revert)"
         )
         self.assertIn("test_priceStrategyMatchesWaCoreUsat (EvmError: Revert)", self._build(status))
+
+class AmountMatchRenderTests(unittest.TestCase):
+    PAYLOAD = {"event_name": "Transfer", "counterparty": "0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0",
+               "recipient": "0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642", "amount": "65,000,000",
+               "inline_symbol": "GHO", "section": "0xtoken"}
+
+    def _notes(self, recipient):
+        forum = {"action": "Transfer", "asset": "GHO", "amount": "65,000,000", "recipient": recipient, "network": "Avalanche"}
+        return rac.describe_amount_matches([{"forum": forum, "payload": self.PAYLOAD}], {}, {}, None)
+
+    def test_an_amount_match_is_not_reported_as_no_mismatch(self):
+        comparison = {"warnings": [], "notes": [], "forum_only_count": 0}
+        out = rac.render_comparison_alerts(comparison, [], 0, (), self._notes("GHO Reserve"))
+        self.assertNotIn("No mismatches found", out)
+        self.assertIn("> Matched on asset and amount only (the forum gives no recipient address); check each recipient:", out)
+
+    def test_a_long_forum_recipient_never_hides_the_payload_recipient(self):
+        comparison = {"warnings": [], "notes": [], "forum_only_count": 0}
+        out = rac.render_comparison_alerts(comparison, [], 0, (), self._notes("the reserve " * 100))
+        self.assertIn("> Payload: Transfer: 65,000,000 `GHO` from 0x5ba7fd868c40c16f7aDfAe6CF87121E13FC2F7a0 "
+                      "to 0x15f22f39FD7b3612840cF0De49b6f9C4879Aa642", out.splitlines())
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 Outputs: warnings (matched item, amount/recipient/decimals disagree), unexplained (payload item
 with no forum counterpart), forum_only (neutral, expected when a post spans many payloads),
 notes (forum amount is a formula, so it is never compared to the decoded amount), amount_matches
-(forum item that names its recipient in words, matched on asset and amount only: the recipient
+(forum item with no recipient address, matched on kind, asset and amount only: the recipient
 is not proven, so the comment lists each pair for a human check).
 """
 import re
@@ -56,9 +56,17 @@ def _leading_number(text):
     return value
 
 
+def _is_approval(forum_action):
+    return (forum_action or "").casefold().startswith("approv")
+
+
 def _amount_match(forum_items, matched_forum_idxs, p):
-    """Index of an unmatched address-less forum item with the payload's asset and amount; same network first."""
+    """Index of an unmatched address-less forum item of the payload's kind, asset and amount; same network first.
+
+    Kind: an allowance moves no tokens, so a forum approval explains only an Approval and a forum movement never does.
+    """
     asset = (p.get("asset") or "").casefold()
+    p_is_approval = p.get("event_name") == "Approval"
     p_num = _leading_number(p.get("amount"))
     if not asset or p_num is None:
         return None
@@ -67,6 +75,7 @@ def _amount_match(forum_items, matched_forum_idxs, p):
         for i, f in enumerate(forum_items)
         if i not in matched_forum_idxs
         and not _extract_address(f.get("recipient"))
+        and _is_approval(f.get("action")) == p_is_approval
         and (f.get("asset") or "").casefold() == asset
         and not _is_formula(f.get("amount"))
         and _leading_number(f.get("amount")) == p_num

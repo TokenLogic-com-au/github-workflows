@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import address_book as ab
 import diff_parser as dp
 import readable_actions as ra
+import spec_compare as sc
 
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures")
 
@@ -404,6 +405,16 @@ class FoldFlowsTests(unittest.TestCase):
         units = ra.fold_flows(items, {self.TOKEN: "GHO"}, {id(i) for i in items})
         self.assertEqual([id(u) for u in units], [id(i) for i in items])
         self.assertNotIn("asset", units[0])
+
+    def test_approval_to_a_spender_outside_the_flow_is_never_folded(self):
+        approval = self._ev("Approval", "0xEX", "0xATTACKER", raw="65")
+        transfer = self._ev("Transfer", "0xEX", "0x1111111111111111111111111111111111111111", raw="65")
+        units = ra.fold_flows([approval, transfer], {self.TOKEN: "GHO"})
+        self.assertEqual([u["recipient"] for u in units], ["0xATTACKER", "0x1111111111111111111111111111111111111111"])
+        forum = [{"action": "Transfer", "asset": "GHO", "amount": "65",
+                  "recipient": "0x1111111111111111111111111111111111111111", "network": None}]
+        out = sc.compare(forum, units)
+        self.assertEqual([u["recipient"] for u in out["unexplained"]], ["0xATTACKER"])
 
 
 if __name__ == "__main__":

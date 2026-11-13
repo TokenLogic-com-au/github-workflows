@@ -198,7 +198,8 @@ def fold_flows(items, symbol_map, exclude_ids=()):
     """Folds token hops and the approvals they spend into one movement unit per flow, each unit with its `asset` symbol.
 
     A hop continues a flow when it moves the same raw amount of the same token in the same payload out of the address
-    the previous hop paid; an approval joins when its owner sends that amount in a later hop. Members stay in
+    the previous hop paid; an approval joins when its owner sends that amount in a later hop and the flow pays its
+    spender (a spender the flow never pays stays its own item, so an unproven allowance is still flagged). Members stay in
     `members`, so a folded approval is shown, never dropped. Items in `exclude_ids` (supply flows) are left alone and
     get no `asset`: spec_compare then never matches them on amount, so a supply flow is judged as one group, not piecewise.
     """
@@ -241,6 +242,7 @@ def fold_flows(items, symbol_map, exclude_ids=()):
             hops.append(nxt)
             used.add(id(nxt[1]))
         members = list(hops)
+        flow_payees = {lower(hop.get("recipient")) for _, hop in hops}
         for hop_pos, hop in hops:
             approval = next(
                 (
@@ -251,6 +253,7 @@ def fold_flows(items, symbol_map, exclude_ids=()):
                     and it.get("event_name") == "Approval"
                     and same_flow(it, head)
                     and lower(it.get("counterparty")) == lower(hop.get("counterparty"))
+                    and lower(it.get("recipient")) in flow_payees
                 ),
                 None,
             )

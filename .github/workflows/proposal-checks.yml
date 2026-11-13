@@ -366,15 +366,24 @@ jobs:
           fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
           # Read from the log even when reports exist: one payload's test can fail while others write reports.
-          # forge's "Failing tests:" summary names each test contract; every failure is listed as Contract.test (reason).
+          # Every failure is listed as Contract.test (reason): from forge's "Failing tests:" summary, else from the per-suite results.
+          # The test name is the LAST "] name(" on the line, because a reason or fuzz args can hold "] ".
           fail_test=$(awk '
-            /^Encountered [0-9]+ failing tests? in / { n = split($NF, part, ":"); contract = part[n]; next }
+            function failure(line,   rest, cut, reason, name) {
+              rest = line; cut = 0
+              while (match(rest, /\] [A-Za-z_][A-Za-z0-9_]*\(/)) { cut += RSTART; rest = substr(rest, RSTART + 1) }
+              if (!cut) return ""
+              reason = substr(line, 1, cut - 1); sub(/^\[FAIL:? ?/, "", reason)
+              name = substr(line, cut + 2); sub(/\(.*/, "", name)
+              return contract "." name (reason == "" ? "" : " (" reason ")")
+            }
+            /^Ran [0-9]+ tests? for / || /^Encountered [0-9]+ failing tests? in / { n = split($NF, part, ":"); contract = part[n]; summary_seen = summary_seen || /^Encountered/; next }
             /^$/ { contract = "" }
             contract != "" && /^\[FAIL/ {
-              reason = $0; sub(/^\[FAIL:? ?/, "", reason); sub(/\] .*/, "", reason)
-              name = $0; sub(/^\[FAIL[^]]*\] /, "", name); sub(/\(.*/, "", name)
-              printf "%s%s.%s (%s)", sep, contract, name, reason; sep = "; "
-            }' forge-test.log)
+              f = failure($0)
+              if (summary_seen) { summary = summary ssep f; ssep = "; " } else { suite = suite usep f; usep = "; " }
+            }
+            END { print (summary != "" ? summary : suite) }' forge-test.log)
           if [ -z "$fail_test" ] && [ -z "$report" ]; then
             fail_test="forge test failed with no further detail"
           fi

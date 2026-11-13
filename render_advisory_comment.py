@@ -105,7 +105,10 @@ def take_proven_listing_seeds(payload_items, label_map, symbol_map, new_reserves
 
 
 def compare_around_seeds(forum_items, seed_groups, remaining_items):
-    """Seed members compare first so event order cannot let a seed explain another movement; their `unexplained` is dropped (seed proof covers it)."""
+    """Seed members compare first so event order cannot let a seed explain another movement; their `unexplained` is dropped (seed proof covers it).
+
+    Seed members carry no `asset`, so they never match on amount: only the second compare has `amount_matches`.
+    """
     seed_members = [member for group in seed_groups for member in group["members"]]
     seed_cmp = spec_compare.compare(forum_items, seed_members)
     comparison = spec_compare.compare(seed_cmp["forum_only"], remaining_items)
@@ -113,7 +116,6 @@ def compare_around_seeds(forum_items, seed_groups, remaining_items):
         **comparison,
         "warnings": seed_cmp["warnings"] + comparison["warnings"],
         "notes": seed_cmp["notes"] + comparison["notes"],
-        "amount_matches": seed_cmp["amount_matches"] + comparison["amount_matches"],
     }
 
 
@@ -139,27 +141,22 @@ def _render_seed_notes(seed_notes) -> str:
 
 def describe_amount_matches(amount_matches, label_map, symbol_map, solidity_labels):
     """One note per forum item matched on asset and amount only, with the payload movement and its folded hops."""
-    notes = []
-    for pair in amount_matches:
-        f, p = pair["forum"], pair["payload"]
-        described = " ".join(str(f.get(key) or "") for key in ("action", "amount", "asset")).split()
-        forum_text = (
-            f"{' '.join(described)} to {f.get('recipient') or 'no recipient'} ({f.get('network') or 'no network'})"
-        )
-        notes.append(
-            {
-                "line": f"Forum: {forum_text}; payload: "
-                + readable_actions.describe_action(p, label_map, symbol_map, solidity_labels),
-                "sub_lines": readable_actions.flow_sub_lines(p, label_map, symbol_map, solidity_labels),
-            }
-        )
-    return notes
+    return [
+        {
+            "forum_line": f"{_forum_seed_line(pair['forum'])} ({pair['forum'].get('network') or 'no network'})",
+            "payload_line": "Payload: "
+            + readable_actions.describe_action(pair["payload"], label_map, symbol_map, solidity_labels),
+            "sub_lines": readable_actions.flow_sub_lines(pair["payload"], label_map, symbol_map, solidity_labels),
+        }
+        for pair in amount_matches
+    ]
 
 
 def _render_amount_match_notes(amount_match_notes) -> str:
-    lines = ["> [!NOTE]", "> Matched on asset and amount only (the forum names the recipient in words); check each recipient:"]
+    lines = ["> [!NOTE]", "> Matched on asset and amount only (the forum gives no recipient address); check each recipient:"]
     for note in amount_match_notes:
-        raw_lines = [f"> {note['line']}"] + [f">   - {sub}" for sub in note["sub_lines"]]
+        # forum and payload get their own capped lines, so a long forum text cannot cut off the payload recipient
+        raw_lines = [f"> {note['forum_line']}", f"> {note['payload_line']}"] + [f">   - {sub}" for sub in note["sub_lines"]]
         lines += [_truncate_at_word_boundary(sanitize_markdown(raw), FINDING_LINE_CAP) for raw in raw_lines]
     return "\n".join(lines)
 
@@ -189,7 +186,7 @@ def render_comparison_alerts(
             for w in comparison["warnings"]
         ]
         blocks.append("> [!WARNING]\n" + "\n".join(lines))
-    if not readable_findings and not comparison["warnings"]:
+    if not readable_findings and not comparison["warnings"] and not amount_match_notes:
         blocks.append("> [!NOTE]\n> No mismatches found between the payload and the forum post.")
     if amount_match_notes:
         blocks.append(_render_amount_match_notes(amount_match_notes))

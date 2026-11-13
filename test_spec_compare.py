@@ -230,6 +230,18 @@ class AmountMatchTests(unittest.TestCase):
         out = sc.compare(forum, [dict(self.GHO_65M, asset=None)])
         self.assertEqual(len(out["unexplained"]), 1)
 
+    def test_a_movement_and_an_approval_never_explain_each_other(self):
+        approval = dict(self.GHO_65M, chain="Avalanche", event_name="Approval")
+        out = sc.compare([self._forum("GHO Reserve", "Avalanche")], [approval])
+        self.assertEqual(out["unexplained"], [approval])
+        self.assertEqual(out["amount_matches"], [])
+        forum_approve = dict(self._forum("GHO Reserve", "Avalanche"), action="Approve")
+        transfer = dict(self.GHO_65M, chain="Avalanche", event_name="Transfer")
+        out = sc.compare([forum_approve], [transfer])
+        self.assertEqual(out["unexplained"], [transfer])
+        out = sc.compare([forum_approve], [approval])
+        self.assertEqual(len(out["amount_matches"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

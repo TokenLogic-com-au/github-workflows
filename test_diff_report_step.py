@@ -141,6 +141,34 @@ class DiffReportStepTest(unittest.TestCase):
         self.assertNotIn("ci_report", outputs)
         self.assertIn("forge test failed", outputs["fork_test_status"])
 
+    def test_bracketed_reasons_fuzz_args_and_bare_fails_keep_name_and_reason(self):
+        log = """Failing tests:
+Encountered 4 failing tests in src/p/PayloadE.t.sol:PayloadE_Test
+[FAIL: assertion failed: [1] != [2]] test_list() (gas: 5)
+[FAIL: revert: [0] check(ok) failed] test_check() (gas: 6)
+[FAIL: panic: overflow; counterexample: calldata=0x01 args=[1, 2]] testFuzz_add(uint256,uint256) (runs: 0, μ: 0, ~: 0)
+[FAIL] test_bare() (gas: 7)
+
+Encountered a total of 4 failing tests, 0 tests succeeded
+"""
+        outputs, _ = run_step({}, {"PayloadA.md": "alpha-body"}, log=log)
+        self.assertEqual(
+            outputs["fork_test_status"],
+            "PayloadE_Test.test_list (assertion failed: [1] != [2]); "
+            "PayloadE_Test.test_check (revert: [0] check(ok) failed); "
+            "PayloadE_Test.testFuzz_add (panic: overflow; counterexample: calldata=0x01 args=[1, 2]); "
+            "PayloadE_Test.test_bare",
+        )
+
+    def test_without_a_summary_the_per_suite_failures_are_named(self):
+        log = """Ran 2 tests for src/p/PayloadF.t.sol:PayloadF_Test
+[PASS] test_ok() (gas: 1)
+[FAIL: EvmError: Revert] test_swap() (gas: 9)
+Suite result: FAILED. 1 passed; 1 failed; 0 skipped; finished in 1s (1s CPU time)
+"""
+        outputs, _ = run_step({}, {"PayloadA.md": "alpha-body"}, log=log)
+        self.assertEqual(outputs["fork_test_status"], "PayloadF_Test.test_swap (EvmError: Revert)")
+
 
 if __name__ == "__main__":
     unittest.main()
