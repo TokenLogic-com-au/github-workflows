@@ -26,8 +26,8 @@ defaults:
     shell: bash
 env:
   MARKER: "<!-- github-workflows-proposal-spec -->"
-  # Same Foundry as upstream aave-proposals-v3's forge test job (test.yml), so a payload test passes here when it passes there; v1.7.1 cannot load Monad's network-qualified hardfork.
-  FOUNDRY_VERSION: nightly
+  # Same Foundry as upstream aave-proposals-v3's forge test job (test.yml, stable since aave-dao/aave-proposals-v3#1250), so a payload test passes here when it passes there; v1.7.1 cannot load Monad's network-qualified hardfork.
+  FOUNDRY_VERSION: stable
 jobs:
   scope:
     # Scopes every job to the single src/<dir>/ the PR touches: count==0 skips all (green), count>1 fails.
