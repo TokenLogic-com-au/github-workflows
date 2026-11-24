@@ -15,6 +15,7 @@ explanation before or after. The exact shape:
   {"action": "<short verb phrase, e.g. 'Reimburse', 'Approve', 'Refresh Allowance'>",
    "kind": "<'allowance' when the action sets, refreshes or cancels an allowance; 'movement' when tokens move>",
    "asset": "<token symbol as written, e.g. 'aEthLidoGHO'>",
+   "asset_address": "<the asset's token contract address as written next to it, or null>",
    "amount": "<the number as written, e.g. '50,000' or '0.5M' or 'Current Balance + buffer'>",
    "recipient": "<name or address as written, or null>",
    "network": "<network name as written, e.g. 'Ethereum'>"}
@@ -25,5 +26,6 @@ Rules:
   amount (e.g. "current balance + buffer"), still include it with that exact
   text as "amount" — never invent a number.
 - Only extract what is actually written. Never guess.
+- "asset_address" is the address the post gives for that token itself — never the recipient's, spender's or owner's address, and never the underlying of an aToken; otherwise null.
 - If you cannot produce valid JSON for any reason, respond with exactly:
   {"forum": [], "error": "<one short reason>"}

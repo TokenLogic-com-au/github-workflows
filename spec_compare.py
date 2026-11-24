@@ -60,6 +60,12 @@ def _leading_number(text):
 FORUM_KIND_BY_APPROVAL = {True: "allowance", False: "movement"}
 
 
+def _first_same_network(forum_items, candidates, chain):
+    chain = (chain or "").casefold()
+    same_network = [i for i in candidates if (forum_items[i].get("network") or "").casefold() == chain]
+    return (same_network or candidates or [None])[0]
+
+
 def _amount_match(forum_items, matched_forum_idxs, p):
     """Index of an unmatched address-less forum item of the payload's kind, asset and amount; same network first.
 
@@ -81,9 +87,7 @@ def _amount_match(forum_items, matched_forum_idxs, p):
         and not _is_formula(f.get("amount"))
         and _leading_number(f.get("amount")) == p_num
     ]
-    chain = (p.get("chain") or "").casefold()
-    same_network = [i for i in candidates if (forum_items[i].get("network") or "").casefold() == chain]
-    return (same_network or candidates or [None])[0]
+    return _first_same_network(forum_items, candidates, p.get("chain"))
 
 
 def compare(forum_items, payload_items):
@@ -98,12 +102,15 @@ def compare(forum_items, payload_items):
         p_addr = _extract_address(p.get("recipient"))
         match_idx = None
         if p_addr:
-            for i, f in enumerate(forum_items):
-                if i in matched_forum_idxs:
-                    continue
-                if _extract_address(f.get("recipient")) == p_addr:
-                    match_idx = i
-                    break
+            p_token = _extract_address(p.get("section")) if p.get("event_name") in ("Approval", "Transfer") else None
+            candidates = [
+                i
+                for i, f in enumerate(forum_items)
+                if i not in matched_forum_idxs
+                and _extract_address(f.get("recipient")) == p_addr
+                and (p_token is None or (f_token := _extract_address(f.get("asset_address"))) is None or f_token == p_token)
+            ]
+            match_idx = _first_same_network(forum_items, candidates, p.get("chain"))
 
         if match_idx is None:
             match_idx = _amount_match(forum_items, matched_forum_idxs, p)

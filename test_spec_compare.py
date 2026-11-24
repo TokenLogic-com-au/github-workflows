@@ -3,6 +3,9 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import address_book
+import diff_parser
+import readable_actions
 import spec_compare as sc
 
 
@@ -191,6 +194,79 @@ class ForumOnlyTests(unittest.TestCase):
         out = sc.compare([matched, stray], payload)
         self.assertEqual(out["forum_only"], [stray])
         self.assertEqual(out["forum_only_count"], 1)
+
+
+class AddressPairingTests(unittest.TestCase):
+    SAFE = "0x22740deBa78d5a0c24C58C740e3715ec29de1bFa"
+    GHO_A = "0xb77E872A68C62CfC0dFb02C067Ecc3DA23B4bbf3"
+    GHO_B = "0xAd571979b4245E163A7E2119EB4dFd94AfDaebC5"
+
+    def _forum(self, network, asset, amount, asset_address=None):
+        return {"action": "Create Allowance", "kind": "allowance", "asset": asset, "asset_address": asset_address,
+                "amount": amount, "recipient": f"AFC {self.SAFE}", "network": network}
+
+    def _approval(self, chain, token, amount, asset="aGHO"):
+        return {"event_name": "Approval", "chain": chain, "asset": asset, "amount": amount,
+                "recipient": self.SAFE, "section": token.lower()}
+
+    def test_multi_chain_funding_update_pairs_every_allowance_to_the_afc(self):
+        diff = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures",
+                                 "multichain_november2026_funding_update_diff.md"), encoding="utf-8").read()
+        _, symbol_map = address_book.build_maps(diff)
+        payload = readable_actions.fold_flows(diff_parser.parse_payload_actions(diff), symbol_map)
+        forum = [
+            self._forum("Plasma", "GHO", "1,000,000", "0xb77E872A68C62CfC0dFb02C067Ecc3DA23B4bbf3"),
+            self._forum("Plasma", "aPlaGHO", "1,000,000", "0xAd571979b4245E163A7E2119EB4dFd94AfDaebC5"),
+            self._forum("Monad", "GHO", "250,000", "0xfc421aD3C883Bf9E7C4f42dE845C4e4405799e73"),
+            self._forum("Monad", "aMonGHO", "250,000", "0x4586face17B0e3D4d51EcABb4B4EBC2354b61b0D"),
+            self._forum("Arbitrum", "GHO", "50,000", "0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33"),
+            self._forum("Mantle", "aManUSDT0", "570,000", "0x7053bAD224F0C021839f6AC645BdaE5F8b585b69"),
+            self._forum("Mantle", "aManWETH", "59", "0xeAC30Ed8609F564aE65C809C4bf42dB2fF426D2C"),
+            self._forum("Gnosis", "aGnoWXDAI", "305,000", "0xd0Dd6cEF72143E22cCED4867eb0d5F2328715533"),
+            self._forum("Gnosis", "aGnoUSDC", "90,000", "0xc6B7AcA6DE8a6044E0e32d0c841a89244A10D284"),
+            self._forum("Gnosis", "aGnoUSDCe", "41,000", "0xC0333cb85B59a788d8C7CAe5e1Fd6E229A3E5a65"),
+            self._forum("Sonic", "aSonUSDC", "100,000", "0x578Ee1ca3a8E1b54554Da1Bf7C583506C4CD11c6"),
+        ]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["forum_only"], [])
+        paired_to_the_afc = [p for p in payload if p.get("event_name") == "Approval" and p["recipient"] == self.SAFE]
+        self.assertEqual(len(paired_to_the_afc), 11)
+        self.assertEqual([p for p in out["unexplained"] if p in paired_to_the_afc], [])
+
+    def test_pool_event_section_is_the_pool_so_the_token_address_is_not_compared(self):
+        recipient = "0x0DDE46b923eB74F1860727914f179e82b9eE47B9"
+        usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        diff = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures",
+                                 "multichain_november2026_funding_update_diff.md"), encoding="utf-8").read()
+        items = [p for p in diff_parser.parse_payload_actions(diff)
+                 if p["recipient"] == recipient and p["event_name"] in ("Withdraw", "Transfer")]
+        self.assertEqual([p["event_name"] for p in items], ["Withdraw", "Transfer"])
+        forum = [{"action": "Transfer", "kind": "movement", "asset": "USDC", "asset_address": usdc,
+                  "amount": "1,000", "recipient": recipient, "network": "Ethereum"}]
+        out = sc.compare(forum, items)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["forum_only"], [])
+        self.assertNotIn(items[0], out["unexplained"])
+
+    def test_swapped_amounts_on_one_network_are_two_warnings(self):
+        forum = [self._forum("Plasma", "GHO", "1,000,000", self.GHO_A),
+                 self._forum("Plasma", "aPlaGHO", "500,000", self.GHO_B)]
+        payload = [self._approval("Plasma", self.GHO_A, "500,000"), self._approval("Plasma", self.GHO_B, "1,000,000")]
+        out = sc.compare(forum, payload)
+        self.assertEqual(len(out["warnings"]), 2)
+
+    def test_same_recipient_with_a_different_token_address_is_unexplained_not_a_warning(self):
+        out = sc.compare([self._forum("Plasma", "GHO", "1,000,000", self.GHO_A)],
+                         [self._approval("Plasma", self.GHO_B, "50,000")])
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(len(out["unexplained"]), 1)
+
+    def test_forum_item_without_an_asset_address_still_pairs_and_prefers_the_same_network(self):
+        forum = [self._forum("Plasma", "GHO", "1,000,000"), self._forum("Monad", "GHO", "250,000")]
+        out = sc.compare(forum, [self._approval("Monad", self.GHO_A, "250,000")])
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["forum_only"], [forum[0]])
 
 
 class AmountMatchTests(unittest.TestCase):
